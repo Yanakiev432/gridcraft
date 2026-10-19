@@ -345,3 +345,8 @@ Forks and modified versions must remove them.
   <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
   <sub>Made by the <a href="https://getartcraft.com/">ArtCraft</a> team and community.</sub>
 </p>
+
+
+## Craft fork — Windows code-signing status
+
+This modified open-source fork is **not** a SignPath Foundation-approved or trusted signed release. We are evaluating its free OSS code-signing program; there is no current Craft edition publisher signature or approved installer. See the [public code-signing policy and release gates](docs/CODE_SIGNING_POLICY.md). Upstream logos/marks are separately licensed and must be replaced before releasing a modified product. Do not install an unsigned experimental MSI as a trusted release.
