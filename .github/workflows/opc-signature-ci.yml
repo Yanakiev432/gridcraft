@@ -39,7 +39,10 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $dir = Join-Path $PWD 'target/opc-acceptance'
           & ./opc-core/tools/test_opc_signature_windows.ps1 -ArtifactDirectory $dir
-          if ($LASTEXITCODE -ne 0) { throw "Core OPC fixture sign/verify failed" }
+          # The helper deliberately runs negative native-command tests: their
+          # expected exit code 1 remains in LASTEXITCODE even after script PASS.
+          # PowerShell script invocation status is the correct acceptance gate.
+          if (-not $?) { throw "Core OPC fixture sign/verify failed" }
       - name: Verify package through actual gridcraft CLI
         shell: pwsh
         run: |
