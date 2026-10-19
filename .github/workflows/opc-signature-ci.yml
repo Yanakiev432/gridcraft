@@ -26,6 +26,10 @@ jobs:
         uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249
         with:
           toolchain: stable
+      - name: Cache reproducible Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: opc-signature-ci-windows
       - name: Rust format and build application CLI
         shell: pwsh
         run: |
@@ -56,6 +60,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "gridcraft CLI rejected valid OPC signature" }
           & $cli opc-verify (Join-Path $dir 'tampered.xlsx')
           if ($LASTEXITCODE -eq 0) { throw "gridcraft CLI falsely accepted tampered file" }
+          # GitHub wraps pwsh steps with exit $LASTEXITCODE. The tampered
+          # document MUST return 1; normalize only after asserting rejection.
+          $global:LASTEXITCODE = 0
       - name: Real CLI signing path with a disposable Windows software key (not QES)
         shell: pwsh
         run: |
