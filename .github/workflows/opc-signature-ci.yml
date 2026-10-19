@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - feature/opc-xml-dsig-cli-20261019
+      - integration/craft-signing-qa-20261019
   workflow_dispatch:
 permissions:
   contents: read
