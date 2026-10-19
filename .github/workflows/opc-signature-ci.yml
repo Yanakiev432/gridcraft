@@ -43,6 +43,9 @@ jobs:
           # expected exit code 1 remains in LASTEXITCODE even after script PASS.
           # PowerShell script invocation status is the correct acceptance gate.
           if (-not $?) { throw "Core OPC fixture sign/verify failed" }
+          # GitHub wraps a pwsh step with exit $LASTEXITCODE; negative checks
+          # intentionally return 1, so explicitly clear only this stale value.
+          $global:LASTEXITCODE = 0
       - name: Verify package through actual gridcraft CLI
         shell: pwsh
         run: |
