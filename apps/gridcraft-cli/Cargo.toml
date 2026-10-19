@@ -23,4 +23,4 @@ zip = { workspace = true }
 quick-xml = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-craft-signing-core = { version = "=0.1.0", git = "https://github.com/Yanakiev432/craft-signing-core.git", rev = "53fbf3557682ef6e206ff8304495baf80bcb897a" }
+craft-signing-core = { version = "=0.1.0", git = "https://github.com/Yanakiev432/craft-signing-core.git", rev = "764d09c5937e0730df4f1a9aba106087e31c4fe7" }

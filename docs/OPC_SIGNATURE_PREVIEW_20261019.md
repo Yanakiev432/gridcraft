@@ -2,7 +2,7 @@
 
 Date: 2026-10-19. Branch: feature/opc-xml-dsig-cli-20261019.
 
-Shared dependency: https://github.com/Yanakiev432/craft-signing-core at immutable rev 53fbf3557682ef6e206ff8304495baf80bcb897a.
+Shared dependency: https://github.com/Yanakiev432/craft-signing-core at immutable rev 764d09c5937e0730df4f1a9aba106087e31c4fe7.
 Microsoft Office OPC/XMLDSig implementation uses the WindowsBase PackageDigitalSignatureManager reference API, never the PDF PAdES signature serializer. This is a separate package signature standard.
 
 ## Actual CLI commands (Windows only)
