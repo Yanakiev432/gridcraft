@@ -42,3 +42,39 @@
 5. Hosted trusted build/signing pipeline, manual release approval, independent Authenticode and SAC tests. Never mark this step PASS on the strength of an upstream signature.
 
 Official references: https://signpath.org/terms.html · https://signpath.org/apply.html · https://docs.signpath.io/origin-verification/ .
+
+
+## Verified publisher binding for Windows trusted-release acceptance
+
+`packaging/windows/assert-trusted-release.ps1` now **fails closed** unless a
+64-character SHA-256 fingerprint of the *preapproved* software-publisher X.509
+certificate is supplied in `CRAFT_RELEASE_PUBLISHER_SHA256` (or as
+`-ExpectedPublisherSha256`). It checks the complete DER certificate digest,
+a valid Authenticode signature, Code Signing EKU, timestamp certificate and the
+current conservative RSA publisher policy.
+
+The expected fingerprint **must come from an independently authorized signing
+identity**, e.g. the approved SignPath Foundation publisher profile and human
+release review. Do not compute the expected fingerprint from the untrusted
+MSI/EXE being evaluated and immediately reuse it as an allowlist value; that
+would defeat publisher binding. Do not accept Learning Machines Inc's upstream
+signed packages as proof that the modified Craft edition is signed by its own
+authorized issuer.
+
+On the approved release host, after independently approving the issuer identity
+and trusted hosted signing setup, use PowerShell 7:
+
+```powershell
+$env:CRAFT_RELEASE_PUBLISHER_SHA256 = '<64-HEX-OF-PREAPPROVED-SOFTWARE-PUBLISHER-CERTIFICATE>'
+pwsh -NoProfile -File packaging/windows/package.ps1 -Arch x64 -RequireTrustedRelease
+```
+
+This example does not supply certificate material, grant credentials, or sign a
+binary by itself. Missing/incorrect publisher fingerprint, absent signature,
+incomplete timestamp or untrusted certificate cause `CODE_SIGNING_NO_GO`.
+The optional `-RequireTrustedRelease` keeps ordinary development builds
+separate; any actual public release must additionally enforce this acceptance
+in its release workflow and pass a clean-device Windows SAC install/uninstall
+review. Approval, signing and a production publisher fingerprint are
+**NOT YET AVAILABLE**. Never disable SAC, WDAC, revocation checks or Windows
+certificate-trust controls to force a PASS.
