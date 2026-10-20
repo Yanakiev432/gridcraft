@@ -19,8 +19,9 @@ concurrency:
 
 jobs:
   release:
-    # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
-    uses: storytold/craft-common-actions/.github/workflows/release.yml@main
+    # Immutable audited upstream commit. Changes to this privileged release
+    # workflow require an explicit PR and review before receiving signing secrets.
+    uses: storytold/craft-common-actions/.github/workflows/release.yml@d7bf8f06e138618890d0ebe8a84a18b010bf3f66
     with:
       app-name: gridcraft
       app-title: GridCraft
