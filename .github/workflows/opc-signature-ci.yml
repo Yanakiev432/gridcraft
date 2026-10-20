@@ -4,6 +4,7 @@ on:
     branches:
       - feature/opc-xml-dsig-cli-20261019
       - integration/craft-signing-qa-20261019
+      - feature/trusted-msi-release-gate-20261020
   workflow_dispatch:
 permissions:
   contents: read
@@ -20,7 +21,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: Yanakiev432/craft-signing-core
-          ref: b65a8751e8a8c1c362a3c157038a75ddccb5fa3e
+          ref: 080adc424c4b8f32d2f00e9fdad096e1be6ac85a
           path: opc-core
           persist-credentials: false
       - name: Install Rust toolchain
@@ -38,6 +39,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Cargo fmt failed" }
           cargo build --locked -p gridcraft-cli
           if ($LASTEXITCODE -ne 0) { throw "CLI build failed" }
+      - name: Require reviewed shared signing core commit
+        shell: pwsh
+        run: |
+          $head = (& git -C opc-core rev-parse HEAD).Trim()
+          if ($head -ne '080adc424c4b8f32d2f00e9fdad096e1be6ac85a') {
+            throw 'Shared signing core provenance mismatch'
+          }
+          Write-Host 'SHARED_CORE_SHA_PIN=PASS'
       - name: Sign verify and tamper-check synthetic DOCX and XLSX (in-memory test identity)
         shell: pwsh
         run: |
