@@ -19,6 +19,10 @@ concurrency:
 
 jobs:
   release:
+    # FAIL-CLOSED: source builds remain available; no public upload until
+    # approved publisher signing and independent MSI/EXE trust gates are wired
+    # directly into the release workflow. Enable only in a reviewed PR.
+    if: ${{ false }}
     # Immutable audited upstream commit. Changes to this privileged release
     # workflow require an explicit PR and review before receiving signing secrets.
     uses: storytold/craft-common-actions/.github/workflows/release.yml@d7bf8f06e138618890d0ebe8a84a18b010bf3f66
