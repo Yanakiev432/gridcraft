@@ -30,6 +30,15 @@ jobs:
           $root = Join-Path $env:RUNNER_TEMP 'craft-release-negative'
           New-Item -ItemType Directory -Force -Path $root | Out-Null
           $gate = Join-Path $PWD 'packaging/windows/assert-trusted-release.ps1'
+          $preflight = Join-Path $root 'without-publisher-pin.exe'
+          [IO.File]::WriteAllBytes($preflight, [byte[]](0x4d, 0x5a, 0x00, 0x00))
+          Remove-Item Env:CRAFT_RELEASE_PUBLISHER_SHA256 -ErrorAction SilentlyContinue
+          $unboundRejected = $false
+          try { & $gate -Paths @($preflight) | Out-Null }
+          catch { $unboundRejected = $_.Exception.Message.Contains('approved publisher certificate SHA256') }
+          if (-not $unboundRejected) { throw 'FAIL_OPEN: missing approved publisher certificate was accepted' }
+          $env:CRAFT_RELEASE_PUBLISHER_SHA256 = '0000000000000000000000000000000000000000000000000000000000000000'
+          Write-Host 'UNPINNED_RELEASE_PUBLISHER_REJECTED=PASS'
           foreach ($extension in @('exe','msi','dll')) {
             $path = Join-Path $root ('unsigned.' + $extension)
             [IO.File]::WriteAllBytes($path, [byte[]](0x4d, 0x5a, 0x00, 0x00))
@@ -48,6 +57,16 @@ jobs:
           try { & $gate -Paths @($invalid) | Out-Null } catch { $denied = $true }
           if (-not $denied) { throw 'FAIL_OPEN: arbitrary unrecognized extension accepted' }
           Write-Host 'INVALID_EXTENSION_REJECTED=PASS'
+          $osBinary = Join-Path $env:WINDIR 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+          if ((Get-AuthenticodeSignature -LiteralPath $osBinary).Status -eq 'Valid') {
+            $badPublisherRejected = $false
+            try { & $gate -Paths @($osBinary) | Out-Null }
+            catch { $badPublisherRejected = $_.Exception.Message.Contains('not the explicitly approved signer') }
+            if (-not $badPublisherRejected) { throw 'FAIL_OPEN: a valid but unapproved OS publisher passed the fork release gate' }
+            Write-Host 'OTHER_TRUSTED_PUBLISHER_REJECTED=PASS'
+          } else {
+            Write-Host 'OTHER_TRUSTED_PUBLISHER_CHECK=SKIPPED_OS_BINARY_NOT_VALID_IN_RUNNER'
+          }
       - name: Require explicit trusted release switch and preserve dev build
         shell: pwsh
         run: |
