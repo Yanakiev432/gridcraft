@@ -18,11 +18,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  fail-closed-release-preflight:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Block public release until trusted signed artifacts are independently validated
+        run: |
+          echo 'PUBLIC_RELEASE_NO_GO: approved publisher and verified signed EXE/MSI release pipeline are not yet available'
+          exit 1
   release:
-    # FAIL-CLOSED: source builds remain available; no public upload until
-    # approved publisher signing and independent MSI/EXE trust gates are wired
-    # directly into the release workflow. Enable only in a reviewed PR.
-    if: ${{ false }}
+    needs: fail-closed-release-preflight
     # Immutable audited upstream commit. Changes to this privileged release
     # workflow require an explicit PR and review before receiving signing secrets.
     uses: storytold/craft-common-actions/.github/workflows/release.yml@d7bf8f06e138618890d0ebe8a84a18b010bf3f66
