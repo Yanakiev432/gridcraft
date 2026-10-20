@@ -5,6 +5,7 @@ on:
       - 'packaging/windows/package.ps1'
       - 'packaging/windows/assert-trusted-release.ps1'
       - '.github/workflows/trusted-release-gate.yml'
+      - '.github/workflows/release.yml'
   push:
     branches:
       - feature/trusted-msi-release-gate-20261020
@@ -12,6 +13,7 @@ on:
       - 'packaging/windows/package.ps1'
       - 'packaging/windows/assert-trusted-release.ps1'
       - '.github/workflows/trusted-release-gate.yml'
+      - '.github/workflows/release.yml'
   workflow_dispatch:
 permissions:
   contents: read
@@ -86,3 +88,6 @@ jobs:
           if (-not $text.Contains($expected)) { throw 'Privileged reusable workflow is not pinned to the reviewed commit' }
           if ($text.Contains('.github/workflows/release.yml@main')) { throw 'MUTABLE_RELEASE_WORKFLOW_NO_GO' }
           Write-Host 'IMMUTABLE_PRIVILEGED_RELEASE_WORKFLOW=PASS'
+          $disabled = 'if: $' + '{{ false }}'
+          if (-not $text.Contains($disabled)) { throw 'FAIL_OPEN: public release must remain disabled until provider identity and post-build signing are independently proven' }
+          Write-Host 'UNAPPROVED_PUBLIC_RELEASE_DISABLED=PASS'
