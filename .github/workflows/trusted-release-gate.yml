@@ -58,3 +58,12 @@ jobs:
           }
           Write-Host 'RELEASE_GATES_EXE_MSI=PASS'
           Write-Host 'OUR_SIGNED_RELEASE=NO; SIGNPATH_PROVIDER=NOT_APPROVED'
+
+      - name: Reject mutable privileged external release workflows
+        shell: pwsh
+        run: |
+          $text = Get-Content '.github/workflows/release.yml' -Raw
+          $expected = 'storytold/craft-common-actions/.github/workflows/release.yml@d7bf8f06e138618890d0ebe8a84a18b010bf3f66'
+          if (-not $text.Contains($expected)) { throw 'Privileged reusable workflow is not pinned to the reviewed commit' }
+          if ($text.Contains('.github/workflows/release.yml@main')) { throw 'MUTABLE_RELEASE_WORKFLOW_NO_GO' }
+          Write-Host 'IMMUTABLE_PRIVILEGED_RELEASE_WORKFLOW=PASS'
