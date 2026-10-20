@@ -1,0 +1,94 @@
+name: Trusted Windows release gate (negative controls)
+on:
+  pull_request:
+    paths:
+      - 'packaging/windows/package.ps1'
+      - 'packaging/windows/assert-trusted-release.ps1'
+      - '.github/workflows/trusted-release-gate.yml'
+      - '.github/workflows/release.yml'
+  push:
+    branches:
+      - feature/trusted-msi-release-gate-20261020
+    paths:
+      - 'packaging/windows/package.ps1'
+      - 'packaging/windows/assert-trusted-release.ps1'
+      - '.github/workflows/trusted-release-gate.yml'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  refuse-unsigned-and-invalid-release:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Never identify unsigned EXE or MSI as trusted releases
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'craft-release-negative'
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $gate = Join-Path $PWD 'packaging/windows/assert-trusted-release.ps1'
+          $preflight = Join-Path $root 'without-publisher-pin.exe'
+          [IO.File]::WriteAllBytes($preflight, [byte[]](0x4d, 0x5a, 0x00, 0x00))
+          Remove-Item Env:CRAFT_RELEASE_PUBLISHER_SHA256 -ErrorAction SilentlyContinue
+          $unboundRejected = $false
+          try { & $gate -Paths @($preflight) | Out-Null }
+          catch { $unboundRejected = $_.Exception.Message.Contains('approved publisher certificate SHA256') }
+          if (-not $unboundRejected) { throw 'FAIL_OPEN: missing approved publisher certificate was accepted' }
+          $env:CRAFT_RELEASE_PUBLISHER_SHA256 = '0000000000000000000000000000000000000000000000000000000000000000'
+          Write-Host 'UNPINNED_RELEASE_PUBLISHER_REJECTED=PASS'
+          foreach ($extension in @('exe','msi','dll')) {
+            $path = Join-Path $root ('unsigned.' + $extension)
+            [IO.File]::WriteAllBytes($path, [byte[]](0x4d, 0x5a, 0x00, 0x00))
+            $denied = $false
+            try {
+              & $gate -Paths @($path) | Out-Null
+            } catch { $denied = $true }
+            if (-not $denied) {
+              throw ('FAIL_OPEN: unsigned ' + $extension + ' passed trusted release gate')
+            }
+            Write-Host ('UNSIGNED_' + $extension.ToUpperInvariant() + '_REJECTED=PASS')
+          }
+          $invalid = Join-Path $root 'not-a-publisher.txt'
+          [IO.File]::WriteAllText($invalid, 'not an executable')
+          $denied = $false
+          try { & $gate -Paths @($invalid) | Out-Null } catch { $denied = $true }
+          if (-not $denied) { throw 'FAIL_OPEN: arbitrary unrecognized extension accepted' }
+          Write-Host 'INVALID_EXTENSION_REJECTED=PASS'
+          $osBinary = Join-Path $env:WINDIR 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+          if ((Get-AuthenticodeSignature -LiteralPath $osBinary).Status -eq 'Valid') {
+            $badPublisherRejected = $false
+            try { & $gate -Paths @($osBinary) | Out-Null }
+            catch { $badPublisherRejected = $_.Exception.Message.Contains('not the explicitly approved signer') }
+            if (-not $badPublisherRejected) { throw 'FAIL_OPEN: a valid but unapproved OS publisher passed the fork release gate' }
+            Write-Host 'OTHER_TRUSTED_PUBLISHER_REJECTED=PASS'
+          } else {
+            Write-Host 'OTHER_TRUSTED_PUBLISHER_CHECK=SKIPPED_OS_BINARY_NOT_VALID_IN_RUNNER'
+          }
+      - name: Require explicit trusted release switch and preserve dev build
+        shell: pwsh
+        run: |
+          $source = Get-Content 'packaging/windows/package.ps1' -Raw
+          if (-not $source.Contains('[switch] $RequireTrustedRelease')) { throw 'release switch missing' }
+          if (([regex]::Matches($source, "assert-trusted-release.ps1")).Count -ne 2) {
+            throw 'EXE and MSI must each have a separate trusted release gate'
+          }
+          Write-Host 'RELEASE_GATES_EXE_MSI=PASS'
+          Write-Host 'OUR_SIGNED_RELEASE=NO; SIGNPATH_PROVIDER=NOT_APPROVED'
+
+      - name: Reject mutable privileged external release workflows
+        shell: pwsh
+        run: |
+          $text = Get-Content '.github/workflows/release.yml' -Raw
+          $expected = 'storytold/craft-common-actions/.github/workflows/release.yml@d7bf8f06e138618890d0ebe8a84a18b010bf3f66'
+          if (-not $text.Contains($expected)) { throw 'Privileged reusable workflow is not pinned to the reviewed commit' }
+          if ($text.Contains('.github/workflows/release.yml@main')) { throw 'MUTABLE_RELEASE_WORKFLOW_NO_GO' }
+          Write-Host 'IMMUTABLE_PRIVILEGED_RELEASE_WORKFLOW=PASS'
+          if (-not $text.Contains('needs: fail-closed-release-preflight') -or -not $text.Contains('PUBLIC_RELEASE_NO_GO') -or -not $text.Contains('exit 1')) {
+            throw 'FAIL_OPEN: public release must depend on an explicit denying preflight until verified signed MSI is available'
+          }
+          Write-Host 'UNAPPROVED_PUBLIC_RELEASE_DISABLED=PASS'

@@ -1,0 +1,41 @@
+{
+  "schema": "craft.opc.native-acceptance.v1",
+  "date": "2026-10-19",
+  "app": "gridcraft",
+  "extension": "xlsx",
+  "source_feature_commit": "7526d4a",
+  "shared_core_commit": "b65a8751e8a8c1c362a3c157038a75ddccb5fa3e",
+  "release_status": "PREVIEW_NOT_SIGNED",
+  "platform": "Windows x64 / Windows GNU Rust cross-target / Windows native execution",
+  "native_cli_binary": {
+    "sha256": "BA5D86C6615AE475382CE2BE0B32DFEC9BCDC2106108C7AA614771DBBB9B5226",
+    "signed_by_code_signing_ca": false
+  },
+  "acceptance": {
+    "cargo_check_win_x64": "PASS",
+    "cargo_build_win_x64": "PASS",
+    "native_convert_or_export": "PASS",
+    "generated_content": "12 cells; A1:D3; 1 sheet; CSV with formulas",
+    "native_open_generated": "PASS",
+    "core_test_identity": "ephemeral self-signed RSA 2048 in-memory only",
+    "native_generated_signed_document_sha256": "AE903F9FADB61624486B5EA6E7BDD350346A9D0C533B085BA0C4283A5ECFA5E8",
+    "signature_integrity_windows_opc": "Success",
+    "native_cli_opc_verify": "PASS",
+    "native_open_signed_document": "PASS",
+    "mutated_part_rejected": "PASS in core fixture suite",
+    "added_unsigned_part_rejected": "PASS in core fixture suite"
+  },
+  "github_ci": {
+    "run_url": "https://github.com/Yanakiev432/gridcraft/actions/runs/39253636135",
+    "status": "RE-RUN PENDING; earlier fixture signatures PASS but CI PowerShell LASTEXITCODE wrapper needed correction"
+  },
+  "not_accepted": [
+    "Real B-Trust QES signing through CLI requires explicit, per-document hardware authorization and provider PIN UI",
+    "Independent eIDAS qualification and revocation/trusted time validation",
+    "Microsoft Office desktop interoperability, not installed on this host",
+    "Native application GUI signing controls",
+    "Authenticode publisher signing and trusted Windows release MSI",
+    "PDF PAdES-B-T/B-LT/B-LTA are separate dependencies"
+  ],
+  "privacy": "No real user document, PIN, private key, or identity was committed."
+}

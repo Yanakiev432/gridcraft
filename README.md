@@ -1,11 +1,4 @@
-<p align="center">
-  <a href="https://getartcraft.com/">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/brand/artcraft-logo-white.svg">
-      <img alt="ArtCraft" src="docs/brand/artcraft-logo.svg" width="200">
-    </picture>
-  </a>
-</p>
+<p align="center"><strong>Independent GridCraft fork</strong></p>
 
 <h1 align="center">GridCraft</h1>
 
@@ -332,16 +325,15 @@ All UI icons are drawn in code and are original; the sample workbooks and every 
 this README were made with GridCraft itself. GridCraft bundles no fonts: it uses the fonts
 installed on your system.
 
-The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are trademarks of the
-ArtCraft Team and are not covered by this license. They may be used only unmodified, and only as
-part of this repository and GridCraft, under [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt).
-Forks and modified versions must remove them.
+The restricted ArtCraft marks are removed from this modified fork; upstream provenance and license notices are retained in Git history.
 
 <sub>Microsoft, Excel and Microsoft 365 are trademarks or registered trademarks of Microsoft Corporation in the United States and/or other countries. GridCraft is an independent, open-source project and is not affiliated with, sponsored by or endorsed by Microsoft Corporation; these names are used only to describe the workflows it is compatible with.</sub>
 
 <br>
 
-<p align="center">
-  <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
-  <sub>Made by the <a href="https://getartcraft.com/">ArtCraft</a> team and community.</sub>
-</p>
+<p align="center"><sub>Independent community fork based on the upstream GridCraft source. No affiliation or endorsement by the original ArtCraft team.</sub></p>
+
+
+## Craft fork — Windows code-signing status
+
+This modified open-source fork is **not** a SignPath Foundation-approved or trusted signed release. We are evaluating its free OSS code-signing program; there is no current Craft edition publisher signature or approved installer. See the [public code-signing policy and release gates](docs/CODE_SIGNING_POLICY.md). ArtCraft marks have been removed from source-controlled brand assets; packaged outputs and screenshots still require pre-release inspection. Do not install an unsigned experimental MSI as a trusted release.

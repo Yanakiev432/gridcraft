@@ -1,0 +1,42 @@
+name: Modified fork brand gate
+on:
+  pull_request:
+    paths:
+      - 'docs/brand/**'
+      - 'README.md'
+      - 'ATTRIBUTION.*'
+      - 'crates/**'
+      - 'apps/**'
+      - 'packaging/**'
+      - 'tools/check_brand_fork.py'
+      - '.github/workflows/fork-brand-gate.yml'
+  push:
+    branches:
+      - feature/oss-brand-cleanup-20261019
+    paths:
+      - 'tools/check_brand_fork.py'
+      - '.github/workflows/fork-brand-gate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-brand-no-go-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Ensure fork source excludes upstream trademark assets
+        run: python3 tools/check_brand_fork.py
+      - name: Assert negative control detects forbidden path
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import tempfile, subprocess
+          import sys
+          sys.path.insert(0, 'tools')
+          from check_brand_fork import EXECUTABLE_ASSET_REFS
+          assert EXECUTABLE_ASSET_REFS.search('include_bytes!("../../../docs/brand/artcraft-mark.svg")')
+          assert EXECUTABLE_ASSET_REFS.search('<img src="docs/brand/artcraft-logo.svg">')
+          assert not EXECUTABLE_ASSET_REFS.search('based on ArtCraft, see historic source')
+          print('PASS: Restricted executable/image references fail closed')
+          PY

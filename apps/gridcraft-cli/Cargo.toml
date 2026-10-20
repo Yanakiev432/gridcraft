@@ -21,3 +21,6 @@ log = { workspace = true }
 # `check`: validating the packages GridCraft writes (content types, relationships).
 zip = { workspace = true }
 quick-xml = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+craft-signing-core = { version = "=0.1.0", git = "https://github.com/Yanakiev432/craft-signing-core.git", rev = "b65a8751e8a8c1c362a3c157038a75ddccb5fa3e" }

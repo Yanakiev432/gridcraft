@@ -1,0 +1,91 @@
+name: OPC gridcraft signing acceptance
+on:
+  push:
+    branches:
+      - feature/opc-xml-dsig-cli-20261019
+      - integration/craft-signing-qa-20261019
+      - feature/trusted-msi-release-gate-20261020
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-opc:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout application fork at exact commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Checkout reviewed common signer fixture
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Yanakiev432/craft-signing-core
+          ref: 080adc424c4b8f32d2f00e9fdad096e1be6ac85a
+          path: opc-core
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249
+        with:
+          toolchain: stable
+      - name: Cache reproducible Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: opc-signature-ci-windows
+      - name: Rust format and build application CLI
+        shell: pwsh
+        run: |
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) { throw "Cargo fmt failed" }
+          cargo build --locked -p gridcraft-cli
+          if ($LASTEXITCODE -ne 0) { throw "CLI build failed" }
+      - name: Require reviewed shared signing core commit
+        shell: pwsh
+        run: |
+          $head = (& git -C opc-core rev-parse HEAD).Trim()
+          if ($head -ne '080adc424c4b8f32d2f00e9fdad096e1be6ac85a') {
+            throw 'Shared signing core provenance mismatch'
+          }
+          Write-Host 'SHARED_CORE_SHA_PIN=PASS'
+      - name: Sign verify and tamper-check synthetic DOCX and XLSX (in-memory test identity)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $PWD 'target/opc-acceptance'
+          & ./opc-core/tools/test_opc_signature_windows.ps1 -ArtifactDirectory $dir
+          # The helper deliberately runs negative native-command tests: their
+          # expected exit code 1 remains in LASTEXITCODE even after script PASS.
+          # PowerShell script invocation status is the correct acceptance gate.
+          if (-not $?) { throw "Core OPC fixture sign/verify failed" }
+          # GitHub wraps a pwsh step with exit $LASTEXITCODE; negative checks
+          # intentionally return 1, so explicitly clear only this stale value.
+          $global:LASTEXITCODE = 0
+      - name: Verify package through actual gridcraft CLI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $PWD 'target/opc-acceptance'
+          $cli = Join-Path $PWD 'target/debug/gridcraft-cli.exe'
+          & $cli opc-verify (Join-Path $dir 'signed.xlsx')
+          if ($LASTEXITCODE -ne 0) { throw "gridcraft CLI rejected valid OPC signature" }
+          & $cli opc-verify (Join-Path $dir 'tampered.xlsx')
+          if ($LASTEXITCODE -eq 0) { throw "gridcraft CLI falsely accepted tampered file" }
+          # GitHub wraps pwsh steps with exit $LASTEXITCODE. The tampered
+          # document MUST return 1; normalize only after asserting rejection.
+          $global:LASTEXITCODE = 0
+      - name: Real CLI signing path with a disposable Windows software key (not QES)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $PWD 'target/opc-acceptance'
+          $cli = Join-Path $PWD 'target/debug/gridcraft-cli.exe'
+          $cert = $null
+          try {
+            $cert = New-SelfSignedCertificate -Type Custom -Subject 'CN=Craft CI test only not QES' -CertStoreLocation 'Cert:\CurrentUser\My' -KeyAlgorithm RSA -KeyLength 2048 -KeyUsage DigitalSignature -NotAfter (Get-Date).AddHours(1)
+            & $cli opc-sign (Join-Path $dir 'original.xlsx') (Join-Path $dir 'cli-signed.xlsx') --thumbprint $cert.Thumbprint
+            if ($LASTEXITCODE -ne 0) { throw "gridcraft CLI signing failed" }
+            & $cli opc-verify (Join-Path $dir 'cli-signed.xlsx')
+            if ($LASTEXITCODE -ne 0) { throw "gridcraft CLI-signed package cannot verify" }
+          } finally {
+            if ($cert) { Remove-Item -LiteralPath ("Cert:\CurrentUser\My\"+$cert.Thumbprint) -Force -ErrorAction SilentlyContinue }
+          }
