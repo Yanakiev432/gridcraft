@@ -2015,6 +2015,20 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
 }
 
 fn review(app: &mut SheetApp, ui: &mut Ui) {
+    // Native signing entry points. Never launch PowerShell or CMD.
+    #[cfg(target_os = "windows")]
+    {
+        let ready = app.session.active().is_some_and(|d| !d.is_dirty() && d.path.is_some());
+        if ui.add_enabled(ready, egui::Button::new("Sign document\nB-Trust").min_size(egui::vec2(100.0, 46.0)))
+            .on_disabled_hover_text("Save the workbook before signing")
+            .clicked()
+        {
+            app.toast = Some(("Native OPC/XMLDSig signing is not yet available; workbook unchanged".to_owned(), crate::now_ms()));
+        }
+        if ui.add_enabled(app.session.active().is_some(), egui::Button::new("Verify\nsignature").min_size(egui::vec2(100.0, 46.0))).clicked() {
+            app.toast = Some(("Native OPC/XMLDSig verification is not yet available".to_owned(), crate::now_ms()));
+        }
+    }
     let __k = big_button(ui, Icon::Spell, "Spelling", "Spelling (F7)", false);
     control_keytip(app, ui, &__k, "dialog:spelling");
     if __k.clicked() {
