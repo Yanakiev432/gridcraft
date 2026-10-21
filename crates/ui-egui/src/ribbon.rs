@@ -2023,7 +2023,7 @@ fn review(app: &mut SheetApp, ui: &mut Ui) {
             .on_disabled_hover_text("Save the workbook before signing")
             .clicked()
         {
-            app.toast = Some(("Native OPC/XMLDSig signing is not yet available; workbook unchanged".to_owned(), crate::now_ms()));
+            { use craft_signing_core::SigningProvider; let result = craft_signing_core::windows_cng::WindowsCngProvider.list_identities(); app.toast = Some((match result { Ok(ids) => format!("Windows CNG found {} signing identities. Native OPC signing is not yet available.", ids.len()), Err(e) => format!("Windows CNG: {e}") }, crate::now_ms())); }
         }
         if ui.add_enabled(app.session.active().is_some(), egui::Button::new("Verify\nsignature").min_size(egui::vec2(100.0, 46.0))).clicked() {
             app.toast = Some(("Native OPC/XMLDSig verification is not yet available".to_owned(), crate::now_ms()));
