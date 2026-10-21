@@ -2015,20 +2015,7 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
 }
 
 fn review(app: &mut SheetApp, ui: &mut Ui) {
-    // Native signing entry points. Never launch PowerShell or CMD.
-    #[cfg(target_os = "windows")]
-    {
-        let ready = app.session.active().is_some_and(|d| !d.is_dirty() && d.path.is_some());
-        if ui.add_enabled(ready, egui::Button::new("Sign document\nB-Trust").min_size(egui::vec2(100.0, 46.0)))
-            .on_disabled_hover_text("Save the workbook before signing")
-            .clicked()
-        {
-            { use craft_signing_core::SigningProvider; let result = craft_signing_core::windows_cng::WindowsCngProvider.list_identities(); app.toast = Some((match result { Ok(ids) => format!("Windows CNG found {} signing identities. Native OPC signing is not yet available.", ids.len()), Err(e) => format!("Windows CNG: {e}") }, crate::now_ms())); }
-        }
-        if ui.add_enabled(app.session.active().is_some(), egui::Button::new("Verify\nsignature").min_size(egui::vec2(100.0, 46.0))).clicked() {
-            app.toast = Some(("Native OPC/XMLDSig verification is not yet available".to_owned(), crate::now_ms()));
-        }
-    }
+    // Signing tools follow the existing Review commands at the far right.
     let __k = big_button(ui, Icon::Spell, "Spelling", "Spelling (F7)", false);
     control_keytip(app, ui, &__k, "dialog:spelling");
     if __k.clicked() {
@@ -2109,6 +2096,40 @@ fn review(app: &mut SheetApp, ui: &mut Ui) {
     }
     if big_button(ui, Icon::Validation, "Allow Edit\nRanges", "Allow Edit Ranges", false).clicked() {
         app.open_dialog("allowEditRanges", json!({}));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        sep(ui);
+        let accent = Tokens::get(ui.ctx()).accent;
+        let ready = app.session.active().is_some_and(|d| !d.is_dirty() && d.path.is_some());
+        let sign = egui::Button::new(egui::RichText::new("✒  Sign\n    B-Trust").strong().size(13.0))
+            .fill(accent.gamma_multiply(0.18))
+            .stroke(Stroke::new(1.0, accent.gamma_multiply(0.7)))
+            .corner_radius(9.0)
+            .min_size(vec2(108.0, 49.0));
+        if ui.add_enabled(ready, sign)
+            .on_disabled_hover_text("Save the workbook before signing")
+            .on_hover_text("Windows certificate discovery; signing not yet implemented")
+            .clicked()
+        {
+            use craft_signing_core::SigningProvider;
+            let result = craft_signing_core::windows_cng::WindowsCngProvider.list_identities();
+            app.toast = Some((match result {
+                Ok(ids) => format!("Windows CNG found {} signing identities. Native OPC signing is not yet available.", ids.len()),
+                Err(e) => format!("Windows CNG: {e}"),
+            }, crate::now_ms()));
+        }
+        let verify = egui::Button::new(egui::RichText::new("✓  Verify\n    signature").strong().size(13.0))
+            .fill(ui.visuals().widgets.inactive.bg_fill)
+            .stroke(Stroke::new(1.0, accent.gamma_multiply(0.45)))
+            .corner_radius(9.0)
+            .min_size(vec2(108.0, 49.0));
+        if ui.add_enabled(app.session.active().is_some(), verify)
+            .on_hover_text("OPC/XMLDSig verification is not yet implemented")
+            .clicked()
+        {
+            app.toast = Some(("Native OPC/XMLDSig verification is not yet available".to_owned(), crate::now_ms()));
+        }
     }
 }
 
