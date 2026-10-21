@@ -37,6 +37,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Cargo fmt failed" }
           cargo build --locked -p gridcraft-cli
           if ($LASTEXITCODE -ne 0) { throw "CLI build failed" }
+      - name: Build desktop application with signing ribbon
+        shell: pwsh
+        run: |
+          cargo build --locked --release -p gridcraft
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop build failed' }
+      - name: Upload Windows desktop application
+        uses: actions/upload-artifact@v4
+        with:
+          name: gridcraft-windows-signing-ribbon
+          path: target/release/gridcraft.exe
+          if-no-files-found: error
       - name: Sign verify and tamper-check synthetic DOCX and XLSX (in-memory test identity)
         shell: pwsh
         run: |
