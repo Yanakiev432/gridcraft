@@ -283,12 +283,12 @@ impl Import {
                         None => {
                             let entity: &[u8] = r.as_ref();
                             match entity {
-                            b"amp" => '&',
-                            b"lt" => '<',
-                            b"gt" => '>',
-                            b"apos" => '\'',
-                            b"quot" => '"',
-                            _ => return Err(xml_error("unsupported XML entity")),
+                                b"amp" => '&',
+                                b"lt" => '<',
+                                b"gt" => '>',
+                                b"apos" => '\'',
+                                b"quot" => '"',
+                                _ => return Err(xml_error("unsupported XML entity")),
                             }
                         }
                     };
