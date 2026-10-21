@@ -1,0 +1,40 @@
+name: Immutable Windows ARM64 upstream action reference
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-arm64.yml'
+      - '.github/workflows/arm64-reusable-ref-gate.yml'
+  push:
+    branches:
+      - feature/immutable-arm64-reusable-ci-20261021
+    paths:
+      - '.github/workflows/windows-arm64.yml'
+      - '.github/workflows/arm64-reusable-ref-gate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-ref-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Require reviewed immutable reusable action, reject mutable untrusted source
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'uses: storytold/craft-common-actions/.github/workflows/windows-arm64.yml@d7bf8f06e138618890d0ebe8a84a18b010bf3f66' .github/workflows/windows-arm64.yml
+          if grep -Fq '.github/workflows/windows-arm64.yml@main' .github/workflows/windows-arm64.yml; then
+            echo 'MUTABLE_ARM64_ACTION_NO_GO'
+            exit 1
+          fi
+          echo 'PINNED_ARM64_UPSTREAM_REUSABLE_WORKFLOW=PASS'
+      - name: Check external workflow exists at pinned commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --max-time 15 'https://raw.githubusercontent.com/storytold/craft-common-actions/d7bf8f06e138618890d0ebe8a84a18b010bf3f66/.github/workflows/windows-arm64.yml' -o /tmp/approved-workflow.yml
+          grep -Fq 'workflow_call:' /tmp/approved-workflow.yml
+          echo 'PINNED_REUSABLE_WORKFLOW_EXISTS=PASS'
