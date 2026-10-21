@@ -280,14 +280,17 @@ impl Import {
                 Event::GeneralRef(r) => {
                     let ch = match r.resolve_char_ref().map_err(xml_error)? {
                         Some(c) => c,
-                        None => match &r.as_ref()[..] {
+                        None => {
+                            let entity: &[u8] = r.as_ref();
+                            match entity {
                             b"amp" => '&',
                             b"lt" => '<',
                             b"gt" => '>',
                             b"apos" => '\'',
                             b"quot" => '"',
                             _ => return Err(xml_error("unsupported XML entity")),
-                        },
+                            }
+                        }
                     };
                     self.append(ch.encode_utf8(&mut [0; 4]))?;
                 }
