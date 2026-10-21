@@ -1,0 +1,31 @@
+name: TLS trust advisory locked-version gate
+on:
+  pull_request:
+    paths:
+      - 'Cargo.lock'
+      - 'tools/check_tls_advisory_versions.py'
+      - '.github/workflows/tls-trust-advisory-gate.yml'
+  push:
+    branches:
+      - main
+      - feature/tls-webpki-security-20261021
+    paths:
+      - 'Cargo.lock'
+      - 'tools/check_tls_advisory_versions.py'
+      - '.github/workflows/tls-trust-advisory-gate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  rustsec-2026-0382-0383-offline-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Pin audited TLS trust versions and negative fixtures
+        run: python3 -B tools/check_tls_advisory_versions.py --self-test
+      - name: Source audit does not imply QES or trusted binary
+        run: |
+          echo 'TLS_RUSTSEC_PATCHED=PASS; SIGNPATH=NOT_APPROVED; EU_DSS=NOT_CHECKED'
