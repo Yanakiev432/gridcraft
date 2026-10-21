@@ -1,0 +1,34 @@
+name: Reject compromised emSign TLS trust dependencies
+on:
+  pull_request:
+    paths:
+      - 'Cargo.lock'
+      - 'tools/check_rustsec_tls_trust.py'
+      - '.github/workflows/tls-trust-regression.yml'
+  push:
+    branches:
+      - feature/tls-emsign-trust-chain-fix-20261021
+    paths:
+      - 'Cargo.lock'
+      - 'tools/check_rustsec_tls_trust.py'
+      - '.github/workflows/tls-trust-regression.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  certificate-validation-security:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify patched versions and negative rollback fixtures
+        run: python -B tools/check_rustsec_tls_trust.py --self-test
+      - name: No release qualification from dependency CI
+        shell: bash
+        run: echo 'TLS_DEPENDENCY_PIN=PASS; HARDWARE_SIGNATURE=NOT_CHECKED; TRUSTED_MSI_RELEASE=NO_GO'
