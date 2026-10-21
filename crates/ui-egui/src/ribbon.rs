@@ -2027,7 +2027,7 @@ fn review(app: &mut SheetApp, ui: &mut Ui) {
                 let script = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default())
                     .join("Programs/CraftSigningExtension/craft_signing_interactive.ps1");
                 if !script.is_file() {
-                    app.toast = Some(("Craft Signing Extension is not installed".to_string(), std::time::Instant::now()));
+                    app.toast = Some(("Craft Signing Extension is not installed".to_string(), crate::now_ms()));
                 } else {
                     match std::process::Command::new("pwsh.exe")
                         .args(["-NoProfile", "-File"])
@@ -2036,8 +2036,8 @@ fn review(app: &mut SheetApp, ui: &mut Ui) {
                         .arg(path)
                         .spawn()
                     {
-                        Ok(_) => app.toast = Some(("Signing window launched; select certificate".to_string(), std::time::Instant::now())),
-                        Err(e) => app.toast = Some((format!("Unable to launch signing: {e}"), std::time::Instant::now())),
+                        Ok(_) => app.toast = Some(("Signing window launched; select certificate".to_string(), crate::now_ms())),
+                        Err(e) => app.toast = Some((format!("Unable to launch signing: {e}"), crate::now_ms())),
                     }
                 }
             }
