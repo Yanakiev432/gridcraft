@@ -2015,7 +2015,7 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
 }
 
 fn review(app: &mut SheetApp, ui: &mut Ui) {
-    #[cfg(target_os = "windows"))]
+    #[cfg(target_os = "windows")]
     if ui.button("Sign with B-Trust" ).clicked() {
         if let Some(doc) = app.session.active() {
             if !doc.is_dirty() {
