@@ -2015,6 +2015,18 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
 }
 
 fn review(app: &mut SheetApp, ui: &mut Ui) {
+    #[cfg(target_os = "windows"))]
+    if ui.button("Sign with B-Trust" ).clicked() {
+        if let Some(doc) = app.session.active() {
+            if !doc.is_dirty() {
+                if let Some(path) = doc.path.as_ref() {
+                    let script = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA" ).unwrap_or_default()).join("Programs/CraftSigningExtension/craft_signing_interactive.ps1" );
+                    let _ = std::process::Command::new("pwsh.exe" ).args(["-NoProfile", "-File" ]).arg(script).args(["-Mode", "Sign", "-InputPath" ]).arg(path).spawn();
+                }
+            }
+        }
+    }
+
     let __k = big_button(ui, Icon::Spell, "Spelling", "Spelling (F7)", false);
     control_keytip(app, ui, &__k, "dialog:spelling");
     if __k.clicked() {
