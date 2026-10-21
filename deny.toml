@@ -1,0 +1,5 @@
+# Fail-closed security scan. Do not suppress RustSec vulnerabilities to achieve a green CI.
+# This scan is separate from the human-reviewed software licence policy.
+[advisories]
+yanked = "warn"
+ignore = []
