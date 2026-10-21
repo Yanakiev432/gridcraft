@@ -2015,34 +2015,6 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
 }
 
 fn review(app: &mut SheetApp, ui: &mut Ui) {
-    #[cfg(target_os = "windows")]
-    {
-        let saved_path = app.session.active().and_then(|doc| if doc.is_dirty() { None } else { doc.path.clone() });
-        let button = ui
-            .add_enabled(saved_path.is_some(), egui::Button::new("Sign document\nB-Trust").min_size(egui::vec2(100.0, 46.0)))
-            .on_disabled_hover_text("Save the workbook before signing")
-            .on_hover_text("Sign a saved XLSX with a certificate; creates a separate signed file");
-        if button.clicked() {
-            if let Some(path) = saved_path {
-                let script = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default())
-                    .join("Programs/CraftSigningExtension/craft_signing_interactive.ps1");
-                if !script.is_file() {
-                    app.toast = Some(("Craft Signing Extension is not installed".to_string(), crate::now_ms()));
-                } else {
-                    match std::process::Command::new("pwsh.exe")
-                        .args(["-NoProfile", "-File"])
-                        .arg(script)
-                        .args(["-Mode", "Sign", "-InputPath"])
-                        .arg(path)
-                        .spawn()
-                    {
-                        Ok(_) => app.toast = Some(("Signing window launched; select certificate".to_string(), crate::now_ms())),
-                        Err(e) => app.toast = Some((format!("Unable to launch signing: {e}"), crate::now_ms())),
-                    }
-                }
-            }
-        }
-    }
     let __k = big_button(ui, Icon::Spell, "Spelling", "Spelling (F7)", false);
     control_keytip(app, ui, &__k, "dialog:spelling");
     if __k.clicked() {
