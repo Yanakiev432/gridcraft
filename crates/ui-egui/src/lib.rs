@@ -22,6 +22,8 @@ pub mod i18n;
 pub mod icons;
 pub mod keymap;
 pub mod keytips;
+#[cfg(target_os = "windows")]
+pub mod office_sign_ui;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
@@ -216,6 +218,8 @@ pub struct SheetApp {
     pub editor: Option<editor::EditState>,
     pub text_box_editor: Option<text_box::EditState>,
     pub dialog: Option<dialogs::Dialog>,
+    #[cfg(target_os = "windows")]
+    pub office_sign: office_sign_ui::OfficeSignUi,
     /// The File tab's Backstage view, when open (UI-only; replaces the ribbon, grid and tabs).
     pub backstage: Option<backstage::Backstage>,
     pub message: Option<(String, String)>,
@@ -274,6 +278,8 @@ impl SheetApp {
             editor: None,
             text_box_editor: None,
             dialog: None,
+            #[cfg(target_os = "windows")]
+            office_sign: office_sign_ui::OfficeSignUi::default(),
             backstage: None,
             message: None,
             toast: None,
@@ -1127,6 +1133,21 @@ impl SheetApp {
                 grid::show(self, ui);
                 self.perf.grid_ms = now_ms() - g0;
             });
+        }
+        #[cfg(target_os = "windows")]
+        {
+            self.office_sign.draw(&ctx, self.grid.rect);
+            if let Some(office_sign_ui::Action::Sign) = self.office_sign.show(&ctx) {
+                let file = self.session.active().and_then(|d| d.path.clone());
+                let result = file.as_deref().ok_or("No saved workbook".to_owned()).and_then(|p| self.office_sign.sign(std::path::Path::new(p)));
+                self.toast = Some((
+                    match result {
+                        Ok(message) => message,
+                        Err(error) => format!("Digital signature not completed: {error}"),
+                    },
+                    now_ms(),
+                ));
+            }
         }
         dialogs::show(self, &ctx);
         widgets::message_box(self, &ctx);

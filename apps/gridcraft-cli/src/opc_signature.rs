@@ -5,7 +5,7 @@
 #[cfg(target_os = "windows")]
 pub(crate) fn execute(cmd: &str, args: &[String], extension: &str) -> Result<String, String> {
     use craft_signing_core::format_contract::{DocumentFamily, FormatBinding, SignatureStandard};
-    use craft_signing_core::opc_windows::{sign_office_document, verify_office_document};
+    use craft_signing_core::opc_windows::{sign_office_document_with_policy, verify_office_document};
     use std::io::Read;
     use std::path::Path;
 
@@ -34,8 +34,14 @@ pub(crate) fn execute(cmd: &str, args: &[String], extension: &str) -> Result<Str
             verify_office_document(input)
         }
         "opc-sign" => {
-            let [_, output, flag, thumbprint] = args else {
-                return Err("opc-sign syntax: opc-sign <document> <new-output> --thumbprint <40-hex>".into());
+            let [_, output, flag, thumbprint, remaining @ ..] = args else {
+                return Err("opc-sign syntax: opc-sign <document> <new-output> --thumbprint <40-hex> [--restrict-additional-signatures]".into());
+            };
+            let allow_additional = match remaining {
+                [] => true,
+                [option] if option == "--allow-additional-signatures" => true,
+                [option] if option == "--restrict-additional-signatures" => false,
+                _ => return Err("Use --allow-additional-signatures or --restrict-additional-signatures (exactly one)".into()),
             };
             if flag != "--thumbprint" {
                 return Err("opc-sign requires explicit --thumbprint".into());
@@ -44,7 +50,7 @@ pub(crate) fn execute(cmd: &str, args: &[String], extension: &str) -> Result<Str
             if output_path.extension().and_then(|x| x.to_str()) != Some(extension) {
                 return Err(format!("opc-sign: output must be .{extension}"));
             }
-            sign_office_document(input, output_path, thumbprint)
+            sign_office_document_with_policy(input, output_path, thumbprint, allow_additional)
         }
         _ => Err("unsupported Office OPC command".into()),
     }

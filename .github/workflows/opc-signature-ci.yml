@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - feature/opc-xml-dsig-cli-20261019
+      - feature/native-signing-ui-20261021
   workflow_dispatch:
 permissions:
   contents: read
@@ -19,7 +20,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: Yanakiev432/craft-signing-core
-          ref: b65a8751e8a8c1c362a3c157038a75ddccb5fa3e
+          ref: b7eb72a63b83247590a24b571288a0b7b970642c
           path: opc-core
           persist-credentials: false
       - name: Install Rust toolchain
@@ -58,6 +59,14 @@ jobs:
           # expected exit code 1 remains in LASTEXITCODE even after script PASS.
           # PowerShell script invocation status is the correct acceptance gate.
           if (-not $?) { throw "Core OPC fixture sign/verify failed" }
+          # Two independent signers and explicit Craft-only restrictive policy
+          # are mandatory additions to the shared signer test.
+          foreach ($family in @('docx','xlsx')) {
+            $two = Join-Path $dir ('two-signers.' + $family)
+            if (-not (Test-Path -LiteralPath $two)) {
+              throw ('Missing two-signer ' + $family + ' fixture')
+            }
+          }
           # GitHub wraps a pwsh step with exit $LASTEXITCODE; negative checks
           # intentionally return 1, so explicitly clear only this stale value.
           $global:LASTEXITCODE = 0
@@ -81,12 +90,24 @@ jobs:
           $dir = Join-Path $PWD 'target/opc-acceptance'
           $cli = Join-Path $PWD 'target/debug/gridcraft-cli.exe'
           $cert = $null
+          $cert2 = $null
           try {
             $cert = New-SelfSignedCertificate -Type Custom -Subject 'CN=Craft CI test only not QES' -CertStoreLocation 'Cert:\CurrentUser\My' -KeyAlgorithm RSA -KeyLength 2048 -KeyUsage DigitalSignature -NotAfter (Get-Date).AddHours(1)
             & $cli opc-sign (Join-Path $dir 'original.xlsx') (Join-Path $dir 'cli-signed.xlsx') --thumbprint $cert.Thumbprint
             if ($LASTEXITCODE -ne 0) { throw "gridcraft CLI signing failed" }
             & $cli opc-verify (Join-Path $dir 'cli-signed.xlsx')
             if ($LASTEXITCODE -ne 0) { throw "gridcraft CLI-signed package cannot verify" }
+
+            $cert2 = New-SelfSignedCertificate -Type Custom -Subject 'CN=Craft CI second independent signer not QES' -CertStoreLocation 'Cert:\CurrentUser\My' -KeyAlgorithm RSA -KeyLength 2048 -KeyUsage DigitalSignature -NotAfter (Get-Date).AddHours(1)
+            & $cli opc-sign (Join-Path $dir 'cli-signed.xlsx') (Join-Path $dir 'cli-two-signers.xlsx') --thumbprint $cert2.Thumbprint --allow-additional-signatures
+            if ($LASTEXITCODE -ne 0) { throw 'gridcraft CLI second independent signer failed' }
+            $result = (& $cli opc-verify (Join-Path $dir 'cli-two-signers.xlsx') | Out-String) | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $result.signature_count -ne 2 -or -not $result.integrity_pass) {
+              throw 'gridcraft CLI second signature did not preserve prior signature'
+            }
+            Write-Host 'CLI_TWO_INDEPENDENT_SIGNERS=PASS'
+
           } finally {
             if ($cert) { Remove-Item -LiteralPath ("Cert:\CurrentUser\My\"+$cert.Thumbprint) -Force -ErrorAction SilentlyContinue }
+            if ($cert2) { Remove-Item -LiteralPath ("Cert:\CurrentUser\My\"+$cert2.Thumbprint) -Force -ErrorAction SilentlyContinue }
           }

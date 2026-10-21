@@ -2107,28 +2107,35 @@ fn review(app: &mut SheetApp, ui: &mut Ui) {
             .stroke(Stroke::new(1.0, accent.gamma_multiply(0.7)))
             .corner_radius(9.0)
             .min_size(vec2(108.0, 49.0));
-        if ui.add_enabled(ready, sign)
+        if ui
+            .add_enabled(ready, sign)
             .on_disabled_hover_text("Save the workbook before signing")
-            .on_hover_text("Windows certificate discovery; signing not yet implemented")
+            .on_hover_text("Choose a Windows certificate, draw a rectangle, then sign an XLSX copy")
             .clicked()
         {
-            use craft_signing_core::SigningProvider;
-            let result = craft_signing_core::windows_cng::WindowsCngProvider.list_identities();
-            app.toast = Some((match result {
-                Ok(ids) => format!("Windows CNG found {} signing identities. Native OPC signing is not yet available.", ids.len()),
-                Err(e) => format!("Windows CNG: {e}"),
-            }, crate::now_ms()));
+            if let Some(path) = app.session.active().and_then(|d| d.path.clone()) {
+                if let Err(error) = app.office_sign.begin(std::path::Path::new(&path)) {
+                    app.toast = Some((format!("Certificate selection failed: {error}"), crate::now_ms()));
+                }
+            }
         }
         let verify = egui::Button::new(egui::RichText::new("✓  Verify\n    signature").strong().size(13.0))
             .fill(ui.visuals().widgets.inactive.bg_fill)
             .stroke(Stroke::new(1.0, accent.gamma_multiply(0.45)))
             .corner_radius(9.0)
             .min_size(vec2(108.0, 49.0));
-        if ui.add_enabled(app.session.active().is_some(), verify)
-            .on_hover_text("OPC/XMLDSig verification is not yet implemented")
-            .clicked()
+        if ui.add_enabled(app.session.active().is_some(), verify).on_hover_text("Independently verify the saved XLSX OPC/XMLDSig integrity").clicked()
         {
-            app.toast = Some(("Native OPC/XMLDSig verification is not yet available".to_owned(), crate::now_ms()));
+            if let Some(path) = app.session.active().and_then(|d| d.path.clone()) {
+                let result = craft_signing_core::opc_windows::verify_office_document(std::path::Path::new(&path));
+                app.toast = Some((
+                    match result {
+                        Ok(_) => "XLSX OPC/XMLDSig cryptographic integrity PASS. Certificate qualification not evaluated.".to_owned(),
+                        Err(error) => format!("XLSX digital signature verification failed: {error}"),
+                    },
+                    crate::now_ms(),
+                ));
+            }
         }
     }
 }
