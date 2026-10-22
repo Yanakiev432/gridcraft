@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use craft_signing_core::office_certificates::{OfficeCertificate, list_office_certificates};
-use craft_signing_core::opc_windows::{sign_office_document_with_policy, verify_office_document};
+use craft_signing_core::opc_native::{sign_opc_inprocess, verify_opc_inprocess};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum Phase {
@@ -201,13 +201,10 @@ impl OfficeSignUi {
             })
             .find(|p| !p.exists())
             .ok_or("No free signed-copy filename")?;
-        sign_office_document_with_policy(original, &output, &cert.thumbprint, self.allow_additional_signatures)?;
+        if !self.allow_additional_signatures { return Err("Native OPC policy-lock is not implemented; no signature was created.".into()); }
+        sign_opc_inprocess(original, &output, &cert.thumbprint)?;
         // Fail closed: reopened independently; cryptographic integrity is NOT QTSA/QES.
-        let verdict = verify_office_document(&output)?;
-        let obj: serde_json::Value = serde_json::from_str(&verdict).map_err(|_| "Invalid OPC verification result")?;
-        if obj.get("integrity_pass").and_then(serde_json::Value::as_bool) != Some(true) {
-            return Err("The new document did not pass OPC signature integrity.".into());
-        }
+        let _signatures = verify_opc_inprocess(&output)?;
         self.cancel();
         Ok(format!("Signed and independently checked: {}. eIDAS QES and visible Office signature-line NOT evaluated.", output.display()))
     }

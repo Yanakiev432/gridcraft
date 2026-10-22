@@ -23,7 +23,7 @@ skrifa = { workspace = true }
 # `desktop_theme.rs`). Already in the tree, with these features, through egui's own
 # accessibility bus; pinned to one version so nothing is built twice.
 [target.'cfg(target_os = "windows")'.dependencies]
-craft-signing-core = { version = "=0.1.0", git = "https://github.com/Yanakiev432/craft-signing-core.git", rev = "b7eb72a63b83247590a24b571288a0b7b970642c" }
+craft-signing-core = { path = "../../../craft-signing-core" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "=5.19.0"
