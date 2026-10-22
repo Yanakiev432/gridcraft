@@ -125,7 +125,7 @@ impl OfficeSignUi {
             .show(ctx, |ui| {
                 if self.phase == Phase::Choose {
                     ui.heading("Choose a certificate");
-                    ui.checkbox(&mut self.allow_additional_signatures, "Allow additional signatures");
+                    ui.add_enabled(false, egui::Checkbox::new(&mut self.allow_additional_signatures, "Allow additional signatures (required for this signing mode)"));
                     ui.small("When enabled, another person can sign this document later without invalidating existing OPC signatures.");
                     ui.label("Windows Current User / Personal. The private key stays in its hardware or software provider.");
                     egui::ScrollArea::vertical().max_height(270.0).show(ui, |ui| {
@@ -158,7 +158,7 @@ impl OfficeSignUi {
                         ui.label(format!("Chosen rectangle: {:.0} x {:.0} screen points",r.width(),r.height()));
                     }
                     ui.colored_label(egui::Color32::YELLOW, "Office OPC signature protects document bytes. A visible Office signature-line drawing is a separate OOXML object, not a PDF stamp.");
-                    ui.checkbox(&mut self.allow_additional_signatures, "Allow additional signatures");
+                    ui.add_enabled(false, egui::Checkbox::new(&mut self.allow_additional_signatures, "Allow additional signatures (required for this signing mode)"));
                     if !self.allow_additional_signatures {
                         ui.small("Disabling additional signatures applies a Craft-only signed policy; other Office programs may not honor this restriction.");
                     }
