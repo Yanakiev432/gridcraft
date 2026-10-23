@@ -1,0 +1,29 @@
+name: RustSec dependency security
+on:
+  push:
+    branches: [main]
+    paths: ['Cargo.lock', 'Cargo.toml', '**/Cargo.toml', 'deny.toml', '.github/workflows/rustsec-security.yml']
+  pull_request:
+    paths: ['Cargo.lock', 'Cargo.toml', '**/Cargo.toml', 'deny.toml', '.github/workflows/rustsec-security.yml']
+  schedule:
+    - cron: '18 4 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  advisory-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25
+        with:
+          command: check advisories
+          arguments: --all-features
+      - name: Prevent acceptance of newly reported known vulnerabilities
+        run: |
+          test -f deny.toml
+          grep -F 'ignore = []' deny.toml
+          echo 'RUSTSEC_ADVISORIES=PASS'

@@ -46,7 +46,10 @@ impl<'a> Package<'a> {
         let mut names = HashMap::new();
         for i in 0..zip.len() {
             if let Some(n) = zip.name_for_index(i) {
-                names.entry(normalize(n)).or_insert(i);
+                // zip 9 returns a fallible Unicode name. Reject a malformed
+                // directory rather than silently dropping or renaming parts.
+                let n = n.map_err(|e| IoError::Zip(format!("invalid archive entry at index {i}: {e}")))?;
+                names.entry(normalize(n.as_ref())).or_insert(i);
             }
         }
         Ok(Package { zip, names, total: 0 })
