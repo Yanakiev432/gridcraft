@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use craft_signing_core::office_certificates::{OfficeCertificate, list_office_certificates};
 use craft_signing_core::office_appearance::OfficeSignatureAppearance;
+use craft_signing_core::office_visible_opc::OfficeImagePlacement;
+use craft_signing_core::office_visible_sign::sign_with_visible_appearance;
 use craft_signing_core::opc_native::{sign_opc_inprocess, verify_opc_inprocess};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -23,6 +25,7 @@ pub struct OfficeSignUi {
     selected: Option<usize>,
     allow_additional_signatures: bool,
     appearance: OfficeSignatureAppearance,
+    embed_visible_at_default_location: bool,
     drag_start: Option<egui::Pos2>,
     rect: Option<egui::Rect>,
     source: Option<PathBuf>,
@@ -42,6 +45,7 @@ impl OfficeSignUi {
         self.selected = first;
         self.allow_additional_signatures = true;
         self.appearance = OfficeSignatureAppearance::default();
+        self.embed_visible_at_default_location = false;
         self.drag_start = None;
         self.rect = None;
         self.source = Some(path.to_path_buf());
@@ -206,8 +210,25 @@ impl OfficeSignUi {
                                 .hint_text("Optional").desired_width(280.0));
                         });
                     }
-                    ui.small("Preview only. The chosen screen rectangle and appearance are not yet embedded as a native Office signature line.");
-                    ui.colored_label(egui::Color32::YELLOW, "Office OPC protects document bytes. Visual document embedding is a separate operation and must occur before signing.");
+                    let file_ext = self.source.as_deref().and_then(|p| p.extension())
+                        .and_then(|s| s.to_str()).unwrap_or("");
+                    let destination = if file_ext.eq_ignore_ascii_case("docx") {
+                        "the end of the Word document"
+                    } else if file_ext.eq_ignore_ascii_case("xlsx") {
+                        "Excel sheet 1, starting at cell E2"
+                    } else {
+                        "an unsupported document format"
+                    };
+                    ui.checkbox(&mut self.embed_visible_at_default_location,
+                        format!("Embed this PDFCraft-style appearance at {destination}"));
+                    if self.embed_visible_at_default_location {
+                        ui.colored_label(egui::Color32::YELLOW,
+                            "The drawn screen rectangle is not yet mapped into Word/Excel coordinates. This mode uses the stated fixed location, creates a new signed copy and refuses already-signed input.");
+                        ui.small("Date shown in the graphic comes from the local device clock, not from a trusted timestamp authority.");
+                    } else {
+                        ui.small("Preview only: no graphic will be embedded. The resulting Office OPC signature will be invisible.");
+                    }
+                    ui.small("Office-native Sign / Signature Setup on this image has not been independently verified.");
                     ui.add_enabled(false, egui::Checkbox::new(&mut self.allow_additional_signatures, "Allow additional signatures (required for this signing mode)"));
                     if !self.allow_additional_signatures {
                         ui.small("Disabling additional signatures applies a Craft-only signed policy; other Office programs may not honor this restriction.");
@@ -252,11 +273,29 @@ impl OfficeSignUi {
             .find(|p| !p.exists())
             .ok_or("No free signed-copy filename")?;
         if !self.allow_additional_signatures { return Err("Native OPC policy-lock is not implemented; no signature was created.".into()); }
-        sign_opc_inprocess(original, &output, &cert.thumbprint)?;
-        // Fail closed: reopened independently; cryptographic integrity is NOT QTSA/QES.
+        let embed_visible = self.embed_visible_at_default_location;
+        if embed_visible {
+            let placement = if ext.eq_ignore_ascii_case("docx") {
+                OfficeImagePlacement::WordDocumentEnd
+            } else {
+                OfficeImagePlacement::ExcelCell { column: 4, row: 1 }
+            };
+            sign_with_visible_appearance(
+                original, &output, &cert.thumbprint, &self.appearance, placement,
+            )?;
+        } else {
+            sign_opc_inprocess(original, &output, &cert.thumbprint)?;
+        }
+        // Fail closed: reopened independently; integrity is not eIDAS/QES.
         let _signatures = verify_opc_inprocess(&output)?;
         self.cancel();
-        Ok(format!("Signed and independently checked: {}. This is an invisible Office OPC signature; appearance preview was NOT embedded. eIDAS QES not evaluated.", output.display()))
+        let appearance_status = if embed_visible {
+            "PdfCraft-style visual asset embedded at the stated default Office location. Native Office Sign button NOT evaluated."
+        } else {
+            "Invisible OPC signature; graphical preview was not embedded."
+        };
+        Ok(format!("Signed and independently checked: {}. {} eIDAS QES not evaluated.",
+                   output.display(), appearance_status))
     }
 }
 
