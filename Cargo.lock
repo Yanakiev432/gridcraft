@@ -783,12 +783,14 @@ dependencies = [
 [[package]]
 name = "craft-signing-core"
 version = "0.1.0"
-source = "git+https://github.com/Yanakiev432/craft-signing-core.git?rev=b7eb72a63b83247590a24b571288a0b7b970642c#b7eb72a63b83247590a24b571288a0b7b970642c"
+source = "git+https://github.com/Yanakiev432/craft-signing-core.git?rev=7c8dd0f0cee6068094520a43fca309fb8ff48bc1#7c8dd0f0cee6068094520a43fca309fb8ff48bc1"
 dependencies = [
+ "cc",
  "rustls-cng",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "zip",
 ]
 
 [[package]]
@@ -1625,7 +1627,7 @@ dependencies = [
 name = "gridcraft-cli"
 version = "0.8.0"
 dependencies = [
- "craft-signing-core 0.1.0 (git+https://github.com/Yanakiev432/craft-signing-core.git?rev=b7eb72a63b83247590a24b571288a0b7b970642c)",
+ "craft-signing-core 0.1.0 (git+https://github.com/Yanakiev432/craft-signing-core.git?rev=7c8dd0f0cee6068094520a43fca309fb8ff48bc1)",
  "gridcraft-engine",
  "gridcraft-mcp",
  "log",
