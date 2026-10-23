@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use craft_signing_core::office_certificates::{OfficeCertificate, list_office_certificates};
+use craft_signing_core::office_appearance::OfficeSignatureAppearance;
 use craft_signing_core::opc_native::{sign_opc_inprocess, verify_opc_inprocess};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -21,6 +22,7 @@ pub struct OfficeSignUi {
     certificates: Vec<OfficeCertificate>,
     selected: Option<usize>,
     allow_additional_signatures: bool,
+    appearance: OfficeSignatureAppearance,
     drag_start: Option<egui::Pos2>,
     rect: Option<egui::Rect>,
     source: Option<PathBuf>,
@@ -39,6 +41,7 @@ impl OfficeSignUi {
         self.certificates = ids;
         self.selected = first;
         self.allow_additional_signatures = true;
+        self.appearance = OfficeSignatureAppearance::default();
         self.drag_start = None;
         self.rect = None;
         self.source = Some(path.to_path_buf());
@@ -157,7 +160,54 @@ impl OfficeSignUi {
                     if let Some(r) = self.rect {
                         ui.label(format!("Chosen rectangle: {:.0} x {:.0} screen points",r.width(),r.height()));
                     }
-                    ui.colored_label(egui::Color32::YELLOW, "Office OPC signature protects document bytes. A visible Office signature-line drawing is a separate OOXML object, not a PDF stamp.");
+                    // Mirrors PdfCraft's appearance preview without promising that an
+                    // editable Office line has already been embedded in the package.
+                    let signer = c.map(|c| OfficeSignatureAppearance::subject_display_name(&c.subject))
+                        .unwrap_or("Unknown signer").to_owned();
+                    let lines = self.appearance.details(&signer);
+                    ui.label(egui::RichText::new("Signature appearance — PdfCraft layout").strong());
+                    egui::Frame::new()
+                        .fill(egui::Color32::WHITE)
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(178, 186, 197)))
+                        .inner_margin(10.0)
+                        .show(ui, |ui| {
+                            ui.set_min_height(96.0);
+                            ui.columns(2, |cols| {
+                                cols[0].label(egui::RichText::new("DIGITAL SIGNATURE")
+                                    .color(egui::Color32::from_gray(92)).small());
+                                if self.appearance.name {
+                                    cols[0].label(egui::RichText::new(&signer).size(19.0).strong()
+                                        .color(egui::Color32::from_rgb(32, 42, 60)));
+                                }
+                                for line in &lines {
+                                    cols[1].label(egui::RichText::new(line)
+                                        .color(egui::Color32::from_rgb(45, 55, 70)));
+                                }
+                            });
+                        });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.checkbox(&mut self.appearance.name, "Name");
+                        ui.checkbox(&mut self.appearance.date, "Date");
+                        ui.checkbox(&mut self.appearance.reason, "Reason");
+                        ui.checkbox(&mut self.appearance.location, "Location");
+                        ui.checkbox(&mut self.appearance.labels, "Labels");
+                    });
+                    if self.appearance.reason {
+                        ui.horizontal(|ui| {
+                            ui.label("Reason");
+                            ui.add(egui::TextEdit::singleline(&mut self.appearance.reason_text)
+                                .hint_text("Optional").desired_width(280.0));
+                        });
+                    }
+                    if self.appearance.location {
+                        ui.horizontal(|ui| {
+                            ui.label("Location");
+                            ui.add(egui::TextEdit::singleline(&mut self.appearance.location_text)
+                                .hint_text("Optional").desired_width(280.0));
+                        });
+                    }
+                    ui.small("Preview only. The chosen screen rectangle and appearance are not yet embedded as a native Office signature line.");
+                    ui.colored_label(egui::Color32::YELLOW, "Office OPC protects document bytes. Visual document embedding is a separate operation and must occur before signing.");
                     ui.add_enabled(false, egui::Checkbox::new(&mut self.allow_additional_signatures, "Allow additional signatures (required for this signing mode)"));
                     if !self.allow_additional_signatures {
                         ui.small("Disabling additional signatures applies a Craft-only signed policy; other Office programs may not honor this restriction.");
@@ -206,7 +256,7 @@ impl OfficeSignUi {
         // Fail closed: reopened independently; cryptographic integrity is NOT QTSA/QES.
         let _signatures = verify_opc_inprocess(&output)?;
         self.cancel();
-        Ok(format!("Signed and independently checked: {}. eIDAS QES and visible Office signature-line NOT evaluated.", output.display()))
+        Ok(format!("Signed and independently checked: {}. This is an invisible Office OPC signature; appearance preview was NOT embedded. eIDAS QES not evaluated.", output.display()))
     }
 }
 
