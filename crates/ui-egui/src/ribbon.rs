@@ -2102,7 +2102,7 @@ fn review(app: &mut SheetApp, ui: &mut Ui) {
         sep(ui);
         let accent = Tokens::get(ui.ctx()).accent;
         let ready = app.session.active().is_some_and(|d| !d.is_dirty() && d.path.is_some());
-        let sign = egui::Button::new(egui::RichText::new("✒  Sign\n    B-Trust").strong().size(13.0))
+        let sign = egui::Button::new(egui::RichText::new("Sign\nB-Trust").strong().size(13.0))
             .fill(accent.gamma_multiply(0.18))
             .stroke(Stroke::new(1.0, accent.gamma_multiply(0.7)))
             .corner_radius(9.0)
@@ -2110,7 +2110,7 @@ fn review(app: &mut SheetApp, ui: &mut Ui) {
         if ui
             .add_enabled(ready, sign)
             .on_disabled_hover_text("Save the workbook before signing")
-            .on_hover_text("Choose a Windows certificate, draw a rectangle, then sign an XLSX copy")
+            .on_hover_text("Choose a Windows certificate, review signing options, then sign a separate XLSX copy")
             .clicked()
         {
             if let Some(path) = app.session.active().and_then(|d| d.path.clone()) {

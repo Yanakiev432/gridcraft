@@ -1,10 +1,13 @@
 //! Adapted from PdfCraft's Digital ID choose/draw/confirm interaction.
 //! Office documents use OPC/XMLDSig via the common Craft signing core,
-//! NOT PDF PAdES. A drawn on-screen rectangle is only a placement selection;
+//! NOT PDF PAdES. A drawn on-screen rectangle is an optional screen guide;
 //! it must not be misrepresented as an embedded Office signature-line object.
 use std::path::{Path, PathBuf};
 
 use craft_signing_core::office_certificates::{OfficeCertificate, list_office_certificates};
+use craft_signing_core::office_appearance::OfficeSignatureAppearance;
+use craft_signing_core::office_visible_opc::{OfficeImagePlacement, parse_excel_cell_anchor};
+use craft_signing_core::office_visible_sign::sign_with_visible_appearance;
 use craft_signing_core::opc_native::{sign_opc_inprocess, verify_opc_inprocess};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -21,6 +24,9 @@ pub struct OfficeSignUi {
     certificates: Vec<OfficeCertificate>,
     selected: Option<usize>,
     allow_additional_signatures: bool,
+    appearance: OfficeSignatureAppearance,
+    embed_visible_at_default_location: bool,
+    excel_anchor_cell: String,
     drag_start: Option<egui::Pos2>,
     rect: Option<egui::Rect>,
     source: Option<PathBuf>,
@@ -39,6 +45,9 @@ impl OfficeSignUi {
         self.certificates = ids;
         self.selected = first;
         self.allow_additional_signatures = true;
+        self.appearance = OfficeSignatureAppearance::default();
+        self.embed_visible_at_default_location = false;
+        self.excel_anchor_cell = "E2".to_owned();
         self.drag_start = None;
         self.rect = None;
         self.source = Some(path.to_path_buf());
@@ -58,8 +67,8 @@ impl OfficeSignUi {
         self.rect
     }
 
-    /// PdfCraft's visible-rectangle interaction, adapted to the current
-    /// Word/Sheet viewport. No document write occurs while dragging.
+    /// Optional on-screen guide. Actual document position comes from the
+    /// Word document end or the explicitly entered Excel cell, not this guide.
     pub fn draw(&mut self, ctx: &egui::Context, viewport: Option<egui::Rect>) {
         if self.phase != Phase::Draw {
             return;
@@ -101,15 +110,15 @@ impl OfficeSignUi {
             .resizable(false)
             .anchor(egui::Align2::CENTER_TOP, [0.0, 80.0])
             .show(ctx, |ui| {
-                ui.label("Drag a rectangle over the document, then confirm the certificate signature.");
+                ui.label("Optional screen guide only. The rectangle is NOT mapped into DOCX/XLSX signing coordinates.");
                 if ui.button("Back to certificates").clicked() {
                     self.phase = Phase::Choose;
                     self.drag_start = None;
                 }
             });
     }
-    /// Dialog flow is structurally identical to PdfCraft: choose a Digital ID,
-    /// place its rectangle, confirm the provider-controlled signature.
+    /// Choose a Digital ID and confirm its provider-controlled signature.
+    /// The optional screen guide is not required for a valid signing request.
     pub fn show(&mut self, ctx: &egui::Context) -> Option<Action> {
         if !matches!(self.phase, Phase::Choose | Phase::Confirm) {
             return None;
@@ -146,7 +155,11 @@ impl OfficeSignUi {
                     }
                     ui.horizontal(|ui| {
                         let can_draw = self.selected.is_some_and(|i| self.certificates.get(i).is_some_and(|c| c.has_private_key && c.valid_now));
-                        if ui.add_enabled(can_draw, egui::Button::new("Draw signature rectangle")).clicked() {
+                        if ui.add_enabled(can_draw, egui::Button::new("Continue to signature settings")).clicked() {
+                            self.rect = None;
+                            self.phase = Phase::Confirm;
+                        }
+                        if ui.add_enabled(can_draw, egui::Button::new("Optional screen guide")).clicked() {
                             self.phase = Phase::Draw;
                         }
                         if ui.button("Cancel").clicked() { self.cancel() }
@@ -155,17 +168,95 @@ impl OfficeSignUi {
                     let c = self.selected.and_then(|i| self.certificates.get(i));
                     ui.label(format!("Certificate: {}",c.map_or("Missing",|c|c.subject.as_str())));
                     if let Some(r) = self.rect {
-                        ui.label(format!("Chosen rectangle: {:.0} x {:.0} screen points",r.width(),r.height()));
+                        ui.small(format!("Optional guide: {:.0} x {:.0} screen points (not embedded at this position)",r.width(),r.height()));
                     }
-                    ui.colored_label(egui::Color32::YELLOW, "Office OPC signature protects document bytes. A visible Office signature-line drawing is a separate OOXML object, not a PDF stamp.");
+                    // Mirrors PdfCraft's appearance preview without promising that an
+                    // editable Office line has already been embedded in the package.
+                    let signer = c.map(|c| OfficeSignatureAppearance::subject_display_name(&c.subject))
+                        .unwrap_or("Unknown signer").to_owned();
+                    let lines = self.appearance.details(&signer);
+                    ui.label(egui::RichText::new("Signature appearance — PdfCraft layout").strong());
+                    egui::Frame::new()
+                        .fill(egui::Color32::WHITE)
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(178, 186, 197)))
+                        .inner_margin(10.0)
+                        .show(ui, |ui| {
+                            ui.set_min_height(96.0);
+                            ui.columns(2, |cols| {
+                                cols[0].label(egui::RichText::new("DIGITAL SIGNATURE")
+                                    .color(egui::Color32::from_gray(92)).small());
+                                if self.appearance.name {
+                                    cols[0].label(egui::RichText::new(&signer).size(19.0).strong()
+                                        .color(egui::Color32::from_rgb(32, 42, 60)));
+                                }
+                                for line in &lines {
+                                    cols[1].label(egui::RichText::new(line)
+                                        .color(egui::Color32::from_rgb(45, 55, 70)));
+                                }
+                            });
+                        });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.checkbox(&mut self.appearance.name, "Name");
+                        ui.checkbox(&mut self.appearance.date, "Date");
+                        ui.checkbox(&mut self.appearance.reason, "Reason");
+                        ui.checkbox(&mut self.appearance.location, "Location");
+                        ui.checkbox(&mut self.appearance.labels, "Labels");
+                    });
+                    if self.appearance.reason {
+                        ui.horizontal(|ui| {
+                            ui.label("Reason");
+                            ui.add(egui::TextEdit::singleline(&mut self.appearance.reason_text)
+                                .hint_text("Optional").desired_width(280.0));
+                        });
+                    }
+                    if self.appearance.location {
+                        ui.horizontal(|ui| {
+                            ui.label("Location");
+                            ui.add(egui::TextEdit::singleline(&mut self.appearance.location_text)
+                                .hint_text("Optional").desired_width(280.0));
+                        });
+                    }
+                    // Own the extension so later UI callbacks may mutate self.
+                    let file_ext = self.source.as_deref().and_then(|p| p.extension())
+                        .and_then(|s| s.to_str()).unwrap_or("").to_owned();
+                    let destination = if file_ext.eq_ignore_ascii_case("docx") {
+                        "the end of the Word document"
+                    } else if file_ext.eq_ignore_ascii_case("xlsx") {
+                        "Excel sheet 1, at the cell specified below"
+                    } else {
+                        "an unsupported document format"
+                    };
+                    ui.checkbox(&mut self.embed_visible_at_default_location,
+                        format!("Embed this PDFCraft-style appearance at {destination}"));
+                    if self.embed_visible_at_default_location {
+                        if file_ext.eq_ignore_ascii_case("xlsx") {
+                            ui.horizontal(|ui| {
+                                ui.label("Excel anchor cell on first worksheet:");
+                                ui.add(egui::TextEdit::singleline(&mut self.excel_anchor_cell)
+                                    .hint_text("E2").desired_width(90.0));
+                            });
+                            if let Err(e) = parse_excel_cell_anchor(&self.excel_anchor_cell) {
+                                ui.colored_label(egui::Color32::RED, e);
+                            }
+                        }
+                        ui.colored_label(egui::Color32::YELLOW,
+                            "The optional screen guide is not used as a document position. Signing creates a new copy and refuses already-signed input.");
+                        ui.small("Date shown in the graphic comes from the local device clock, not from a trusted timestamp authority.");
+                    } else {
+                        ui.small("Preview only: no graphic will be embedded. The resulting Office OPC signature will be invisible.");
+                    }
+                    ui.small("Office-native Sign / Signature Setup on this image has not been independently verified.");
                     ui.add_enabled(false, egui::Checkbox::new(&mut self.allow_additional_signatures, "Allow additional signatures (required for this signing mode)"));
                     if !self.allow_additional_signatures {
                         ui.small("Disabling additional signatures applies a Craft-only signed policy; other Office programs may not honor this restriction.");
                     }
                     ui.label("The Windows certificate provider will request your PIN if necessary. Never enter your PIN into Craft.");
                     ui.horizontal(|ui| {
-                        if ui.button("Back").clicked() { self.phase = Phase::Draw }
-                        if ui.button("Sign a separate copy").clicked() { action = Some(Action::Sign) }
+                        if ui.button("Back").clicked() { self.phase = Phase::Choose }
+                        let anchor_is_valid = !self.embed_visible_at_default_location
+                            || !file_ext.eq_ignore_ascii_case("xlsx")
+                            || parse_excel_cell_anchor(&self.excel_anchor_cell).is_ok();
+                        if ui.add_enabled(anchor_is_valid, egui::Button::new("Sign a separate copy")).clicked() { action = Some(Action::Sign) }
                         if ui.button("Cancel").clicked() { self.cancel() }
                     });
                 }
@@ -176,8 +267,8 @@ impl OfficeSignUi {
         action
     }
     pub fn sign(&mut self, current: &Path) -> Result<String, String> {
-        if self.phase != Phase::Confirm || self.rect.is_none() {
-            return Err("Choose a certificate and draw a rectangle before signing.".into());
+        if self.phase != Phase::Confirm {
+            return Err("Choose a certificate and confirm the signing options before signing.".into());
         }
         let original = self.source.as_ref().ok_or("No original document")?;
         if original != current {
@@ -202,11 +293,29 @@ impl OfficeSignUi {
             .find(|p| !p.exists())
             .ok_or("No free signed-copy filename")?;
         if !self.allow_additional_signatures { return Err("Native OPC policy-lock is not implemented; no signature was created.".into()); }
-        sign_opc_inprocess(original, &output, &cert.thumbprint)?;
-        // Fail closed: reopened independently; cryptographic integrity is NOT QTSA/QES.
+        let embed_visible = self.embed_visible_at_default_location;
+        if embed_visible {
+            let placement = if ext.eq_ignore_ascii_case("docx") {
+                OfficeImagePlacement::WordDocumentEnd
+            } else {
+                parse_excel_cell_anchor(&self.excel_anchor_cell)?
+            };
+            sign_with_visible_appearance(
+                original, &output, &cert.thumbprint, &self.appearance, placement,
+            )?;
+        } else {
+            sign_opc_inprocess(original, &output, &cert.thumbprint)?;
+        }
+        // Fail closed: reopened independently; integrity is not eIDAS/QES.
         let _signatures = verify_opc_inprocess(&output)?;
         self.cancel();
-        Ok(format!("Signed and independently checked: {}. eIDAS QES and visible Office signature-line NOT evaluated.", output.display()))
+        let appearance_status = if embed_visible {
+            "PdfCraft-style visual asset embedded at the stated default Office location. Native Office Sign button NOT evaluated."
+        } else {
+            "Invisible OPC signature; graphical preview was not embedded."
+        };
+        Ok(format!("Signed and independently checked: {}. {} eIDAS QES not evaluated.",
+                   output.display(), appearance_status))
     }
 }
 
@@ -218,5 +327,16 @@ mod tests {
         let mut s = OfficeSignUi::default();
         assert!(!s.active());
         assert!(s.sign(Path::new("nonexistent.docx")).is_err());
+    }
+
+    #[test]
+    fn confirm_no_longer_requires_an_unmapped_screen_rectangle() {
+        let mut s = OfficeSignUi::default();
+        s.phase = Phase::Confirm;
+        assert!(s.rect.is_none());
+        assert_eq!(
+            s.sign(Path::new("nonexistent.docx")).unwrap_err(),
+            "No original document"
+        );
     }
 }
