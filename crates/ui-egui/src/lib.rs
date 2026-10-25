@@ -1136,14 +1136,23 @@ impl SheetApp {
         }
         #[cfg(target_os = "windows")]
         {
-            self.office_sign.draw(&ctx, self.grid.rect);
-            if let Some(office_sign_ui::Action::Sign) = self.office_sign.show(&ctx) {
-                let file = self.session.active().and_then(|d| d.path.clone());
-                let result = file.as_deref().ok_or("No saved workbook".to_owned()).and_then(|p| self.office_sign.sign(std::path::Path::new(p)));
+            if let Some(result) = self.office_sign.poll() {
                 self.toast = Some((
                     match result {
                         Ok(message) => message,
                         Err(error) => format!("Digital signature not completed: {error}"),
+                    },
+                    now_ms(),
+                ));
+            }
+            self.office_sign.draw(&ctx, self.grid.rect);
+            if let Some(office_sign_ui::Action::Sign) = self.office_sign.show(&ctx) {
+                let file = self.session.active().and_then(|d| d.path.clone());
+                let result = file.as_deref().ok_or("No saved workbook".to_owned()).and_then(|p| self.office_sign.start_sign(std::path::Path::new(p)));
+                self.toast = Some((
+                    match result {
+                        Ok(()) => "Digital signing started; complete any Windows provider PIN prompt.".to_owned(),
+                        Err(error) => format!("Digital signature not started: {error}"),
                     },
                     now_ms(),
                 ));

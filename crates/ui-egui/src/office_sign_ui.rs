@@ -3,6 +3,8 @@
 //! NOT PDF PAdES. A drawn on-screen rectangle is an optional screen guide;
 //! it must not be misrepresented as an embedded Office signature-line object.
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::time::Duration;
 
 use craft_signing_core::office_certificates::{OfficeCertificate, list_office_certificates};
 use craft_signing_core::office_appearance::OfficeSignatureAppearance;
@@ -14,9 +16,11 @@ use craft_signing_core::opc_native::{sign_opc_inprocess, verify_opc_inprocess};
 enum Phase {
     #[default]
     Closed,
+    Loading,
     Choose,
     Draw,
     Confirm,
+    Signing,
 }
 #[derive(Default)]
 pub struct OfficeSignUi {
@@ -31,19 +35,32 @@ pub struct OfficeSignUi {
     rect: Option<egui::Rect>,
     source: Option<PathBuf>,
     pub notice: Option<String>,
+    inventory_rx: Option<Receiver<Result<Vec<OfficeCertificate>, String>>>,
+    sign_rx: Option<Receiver<Result<String, String>>>,
 }
 pub enum Action {
     Sign,
 }
 impl OfficeSignUi {
     pub fn begin(&mut self, path: &Path) -> Result<(), String> {
+        if self.active() {
+            return Err("A certificate selection or signature operation is already active.".into());
+        }
         if !path.is_file() {
             return Err("Save the document before choosing a certificate.".into());
         }
-        let ids = list_office_certificates()?;
-        let first = ids.iter().position(|c| c.has_private_key && c.valid_now);
-        self.certificates = ids;
-        self.selected = first;
+        // Provider enumeration may call smart-card middleware: never block the GUI thread.
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("craft-office-certificates".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(list_office_certificates)
+                    .unwrap_or_else(|_| Err("Certificate inventory worker failed".into()));
+                let _ = tx.send(result);
+            })
+            .map_err(|e| format!("Cannot launch certificate inventory: {e}"))?;
+        self.certificates.clear();
+        self.selected = None;
         self.allow_additional_signatures = true;
         self.appearance = OfficeSignatureAppearance::default();
         self.embed_visible_at_default_location = false;
@@ -51,7 +68,8 @@ impl OfficeSignUi {
         self.drag_start = None;
         self.rect = None;
         self.source = Some(path.to_path_buf());
-        self.phase = Phase::Choose;
+        self.phase = Phase::Loading;
+        self.inventory_rx = Some(rx);
         self.notice = None;
         Ok(())
     }
@@ -59,9 +77,75 @@ impl OfficeSignUi {
         self.phase != Phase::Closed
     }
     pub fn cancel(&mut self) {
+        // Never silently abandon an in-flight hardware-signing operation.
+        if self.phase == Phase::Signing {
+            return;
+        }
         self.phase = Phase::Closed;
         self.drag_start = None;
         self.source = None;
+        self.inventory_rx = None;
+        self.sign_rx = None;
+    }
+    /// Poll the CNG/provider workers without blocking an egui frame.
+    /// A result is returned once and must be surfaced by the host application.
+    pub fn poll(&mut self) -> Option<Result<String, String>> {
+        match self.inventory_rx.as_ref().map(|rx| rx.try_recv()) {
+            Some(Ok(Ok(ids))) => {
+                self.selected = ids.iter().position(|c| c.has_private_key && c.valid_now);
+                self.certificates = ids;
+                self.inventory_rx = None;
+                self.phase = Phase::Choose;
+            }
+            Some(Ok(Err(error))) => {
+                self.cancel();
+                return Some(Err(format!("Certificate selection failed: {error}")));
+            }
+            Some(Err(TryRecvError::Disconnected)) => {
+                self.cancel();
+                return Some(Err("Certificate inventory worker disconnected".into()));
+            }
+            _ => {}
+        }
+        match self.sign_rx.as_ref().map(|rx| rx.try_recv()) {
+            Some(Ok(result)) => {
+                self.sign_rx = None;
+                self.phase = Phase::Closed;
+                self.source = None;
+                return Some(result);
+            }
+            Some(Err(TryRecvError::Disconnected)) => {
+                self.sign_rx = None;
+                self.phase = Phase::Closed;
+                self.source = None;
+                return Some(Err("Hardware signing worker disconnected; inspect the output folder before retrying".into()));
+            }
+            _ => {}
+        }
+        None
+    }
+    /// Execute the confirmed request away from the GUI thread. A provider PIN
+    /// prompt may remain pending; do not start another request until it returns.
+    pub fn start_sign(&mut self, current: &Path) -> Result<(), String> {
+        if self.phase != Phase::Confirm {
+            return Err("Confirm a certificate and signing options first.".into());
+        }
+        if self.source.as_deref() != Some(current) {
+            return Err("The open document changed: start a new signature.".into());
+        }
+        // Move the immutable signing snapshot to the background worker;
+        // the original document is never overwritten by sign().
+        let mut request = std::mem::take(self);
+        let path = current.to_path_buf();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| request.sign(&path)))
+                .unwrap_or_else(|_| Err("Unexpected failure in the signature worker; inspect output before retrying".into()));
+            let _ = tx.send(result);
+        });
+        self.phase = Phase::Signing;
+        self.sign_rx = Some(rx);
+        Ok(())
     }
     pub fn screen_rectangle(&self) -> Option<egui::Rect> {
         self.rect
@@ -120,6 +204,27 @@ impl OfficeSignUi {
     /// Choose a Digital ID and confirm its provider-controlled signature.
     /// The optional screen guide is not required for a valid signing request.
     pub fn show(&mut self, ctx: &egui::Context) -> Option<Action> {
+        if self.phase == Phase::Loading {
+            ctx.request_repaint_after(Duration::from_millis(120));
+            egui::Window::new("Reading Windows certificates")
+                .collapsible(false).resizable(false).show(ctx, |ui| {
+                    ui.spinner();
+                    ui.label("Checking available certificates. The application remains responsive.");
+                    if ui.button("Cancel certificate selection").clicked() { self.cancel(); }
+                });
+            return None;
+        }
+        if self.phase == Phase::Signing {
+            ctx.request_repaint_after(Duration::from_millis(120));
+            egui::Window::new("Digital signature in progress")
+                .collapsible(false).resizable(false).show(ctx, |ui| {
+                    ui.spinner();
+                    ui.label("Windows/B-Trust may be waiting for its own PIN dialog.");
+                    ui.label("The document is being signed and verified in a background worker.");
+                    ui.label("Do not repeat the request or close the application until the provider returns.");
+                });
+            return None;
+        }
         if !matches!(self.phase, Phase::Choose | Phase::Confirm) {
             return None;
         }
@@ -134,7 +239,8 @@ impl OfficeSignUi {
             .show(ctx, |ui| {
                 if self.phase == Phase::Choose {
                     ui.heading("Choose a certificate");
-                    ui.add_enabled(false, egui::Checkbox::new(&mut self.allow_additional_signatures, "Allow additional signatures (required for this signing mode)"));
+                    ui.checkbox(&mut self.allow_additional_signatures, "Allow additional signatures");
+                    ui.small("Turning this off sets a signed Craft-only policy. Microsoft Office may ignore that restriction.");
                     ui.small("When enabled, another person can sign this document later without invalidating existing OPC signatures.");
                     ui.label("Windows Current User / Personal. The private key stays in its hardware or software provider.");
                     egui::ScrollArea::vertical().max_height(270.0).show(ui, |ui| {
@@ -246,9 +352,11 @@ impl OfficeSignUi {
                         ui.small("Preview only: no graphic will be embedded. The resulting Office OPC signature will be invisible.");
                     }
                     ui.small("Office-native Sign / Signature Setup on this image has not been independently verified.");
-                    ui.add_enabled(false, egui::Checkbox::new(&mut self.allow_additional_signatures, "Allow additional signatures (required for this signing mode)"));
-                    if !self.allow_additional_signatures {
-                        ui.small("Disabling additional signatures applies a Craft-only signed policy; other Office programs may not honor this restriction.");
+                    ui.checkbox(&mut self.allow_additional_signatures, "Allow additional signatures");
+                    ui.small("Turning this off sets a signed Craft-only policy. Microsoft Office may ignore that restriction.");
+                    if !self.allow_additional_signatures && self.embed_visible_at_default_location {
+                        ui.colored_label(egui::Color32::YELLOW,
+                            "Craft-only restriction is not supported together with embedded visible appearance. Disable that appearance to sign with restriction.");
                     }
                     ui.label("The Windows certificate provider will request your PIN if necessary. Never enter your PIN into Craft.");
                     ui.horizontal(|ui| {
@@ -256,7 +364,8 @@ impl OfficeSignUi {
                         let anchor_is_valid = !self.embed_visible_at_default_location
                             || !file_ext.eq_ignore_ascii_case("xlsx")
                             || parse_excel_cell_anchor(&self.excel_anchor_cell).is_ok();
-                        if ui.add_enabled(anchor_is_valid, egui::Button::new("Sign a separate copy")).clicked() { action = Some(Action::Sign) }
+                        let mode_compatible = self.allow_additional_signatures || !self.embed_visible_at_default_location;
+                        if ui.add_enabled(anchor_is_valid && mode_compatible, egui::Button::new("Sign a separate copy")).clicked() { action = Some(Action::Sign) }
                         if ui.button("Cancel").clicked() { self.cancel() }
                     });
                 }
@@ -292,9 +401,16 @@ impl OfficeSignUi {
             })
             .find(|p| !p.exists())
             .ok_or("No free signed-copy filename")?;
-        if !self.allow_additional_signatures { return Err("Native OPC policy-lock is not implemented; no signature was created.".into()); }
         let embed_visible = self.embed_visible_at_default_location;
-        if embed_visible {
+        if !self.allow_additional_signatures {
+            if embed_visible {
+                return Err("Craft-only signature restriction cannot be combined with embedded appearance.".into());
+            }
+            craft_signing_core::opc_windows::sign_office_document_with_policy(
+                original, &output, &cert.thumbprint, false,
+            )?;
+            craft_signing_core::opc_windows::verify_office_document(&output)?;
+        } else if embed_visible {
             let placement = if ext.eq_ignore_ascii_case("docx") {
                 OfficeImagePlacement::WordDocumentEnd
             } else {
@@ -309,7 +425,9 @@ impl OfficeSignUi {
         // Fail closed: reopened independently; integrity is not eIDAS/QES.
         let _signatures = verify_opc_inprocess(&output)?;
         self.cancel();
-        let appearance_status = if embed_visible {
+        let appearance_status = if !self.allow_additional_signatures {
+            "Craft-only additional-signature restriction embedded. Microsoft Office is not required to honor this policy."
+        } else if embed_visible {
             "PdfCraft-style visual asset embedded at the stated default Office location. Native Office Sign button NOT evaluated."
         } else {
             "Invisible OPC signature; graphical preview was not embedded."
@@ -322,6 +440,28 @@ impl OfficeSignUi {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn certificate_discovery_requires_an_existing_saved_document() {
+        let mut s = OfficeSignUi::default();
+        assert!(s.begin(Path::new("not-a-real-file-for-craft-signing.docx")).is_err());
+        assert!(!s.active());
+    }
+
+    #[test]
+    fn signing_cannot_start_without_confirmed_certificate() {
+        let mut s = OfficeSignUi::default();
+        assert!(s.start_sign(Path::new("any.docx")).is_err());
+        assert!(!s.active());
+    }
+
+    #[test]
+    fn cancel_does_not_abandon_a_hardware_signing_operation() {
+        let mut s = OfficeSignUi::default();
+        s.phase = Phase::Signing;
+        s.cancel();
+        assert_eq!(s.phase, Phase::Signing);
+    }
+
     #[test]
     fn closed_state_will_not_sign() {
         let mut s = OfficeSignUi::default();
