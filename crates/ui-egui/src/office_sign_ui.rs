@@ -222,6 +222,7 @@ impl OfficeSignUi {
             egui::Window::new("Digital signature in progress")
                 .collapsible(false).resizable(false).show(ctx, |ui| {
                     ui.spinner();
+                    ui.label("QA V22 - Windows PIN dialog owner test (experimental)");
                     ui.label("Windows/B-Trust may be waiting for its own PIN dialog.");
                     ui.label("The document is being signed and verified in a background worker.");
                     ui.label("Do not repeat the request or close the application until the provider returns.");
