@@ -4,7 +4,8 @@
 //! it must not be misrepresented as an embedded Office signature-line object.
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::io::Write;
 
 use craft_signing_core::office_certificates::{OfficeCertificate, list_office_certificates};
 use craft_signing_core::office_appearance::OfficeSignatureAppearance;
@@ -37,9 +38,19 @@ pub struct OfficeSignUi {
     pub notice: Option<String>,
     inventory_rx: Option<Receiver<Result<Vec<OfficeCertificate>, String>>>,
     sign_rx: Option<Receiver<Result<String, String>>>,
+    sign_started: Option<Instant>,
 }
 pub enum Action {
     Sign,
+}
+/// Local QA breadcrumbs. Only event labels and UTC millisecond timestamps are recorded.
+fn trace_ui_stage(stage: &str) {
+    let Some(folder) = std::env::var_os("CRAFT_OPC_TRACE_DIR").map(PathBuf::from) else { return };
+    if !folder.is_dir() { return; }
+    let name = format!("office-ui-stage-{}.log", std::process::id());
+    let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(folder.join(name)) else { return };
+    let millis = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
+    let _ = writeln!(file, "utc_ms={millis} stage={stage}");
 }
 impl OfficeSignUi {
     pub fn begin(&mut self, path: &Path) -> Result<(), String> {
@@ -66,7 +77,7 @@ impl OfficeSignUi {
         self.selected = None;
         self.allow_additional_signatures = true;
         self.appearance = OfficeSignatureAppearance::default();
-        self.embed_visible_at_default_location = false;
+        self.embed_visible_at_default_location = true; // XLSX fixed-cell visible appearance, not screen rectangle.
         self.excel_anchor_cell = "E2".to_owned();
         self.drag_start = None;
         self.rect = None;
@@ -89,6 +100,7 @@ impl OfficeSignUi {
         self.source = None;
         self.inventory_rx = None;
         self.sign_rx = None;
+        self.sign_started = None;
     }
     /// Poll the CNG/provider workers without blocking an egui frame.
     /// A result is returned once and must be surfaced by the host application.
@@ -113,12 +125,14 @@ impl OfficeSignUi {
         match self.sign_rx.as_ref().map(|rx| rx.try_recv()) {
             Some(Ok(result)) => {
                 self.sign_rx = None;
+                self.sign_started = None;
                 self.phase = Phase::Closed;
                 self.source = None;
                 return Some(result);
             }
             Some(Err(TryRecvError::Disconnected)) => {
                 self.sign_rx = None;
+                self.sign_started = None;
                 self.phase = Phase::Closed;
                 self.source = None;
                 return Some(Err("Hardware signing worker disconnected; inspect the output folder before retrying".into()));
@@ -136,6 +150,11 @@ impl OfficeSignUi {
         if self.source.as_deref() != Some(current) {
             return Err("The open document changed: start a new signature.".into());
         }
+        if !self.allow_additional_signatures {
+            trace_ui_stage("unsupported_policy_rejected_before_worker");
+            return Err("Restricted Craft-only mode uses a hidden legacy helper and is disabled in B-Trust QA. Enable Allow additional signatures.".into());
+        }
+        trace_ui_stage(if self.embed_visible_at_default_location { "dispatch_native_visible" } else { "dispatch_native_invisible" });
         // Move the immutable signing snapshot to the background worker;
         // the original document is never overwritten by sign().
         let mut request = std::mem::take(self);
@@ -148,6 +167,7 @@ impl OfficeSignUi {
         });
         self.phase = Phase::Signing;
         self.sign_rx = Some(rx);
+        self.sign_started = Some(Instant::now());
         Ok(())
     }
     pub fn screen_rectangle(&self) -> Option<egui::Rect> {
@@ -222,7 +242,14 @@ impl OfficeSignUi {
             egui::Window::new("Digital signature in progress")
                 .collapsible(false).resizable(false).show(ctx, |ui| {
                     ui.spinner();
-                    ui.label("QA V22 - Windows PIN dialog owner test (experimental)");
+                    ui.label("QA V23 - instrumented native B-Trust test (experimental)");
+                    if let Some(started) = self.sign_started {
+                        let elapsed = started.elapsed().as_secs();
+                        ui.label(format!("Elapsed: {elapsed} s"));
+                        if elapsed >= 30 {
+                            ui.colored_label(egui::Color32::YELLOW, "No response from signing provider; do not start a second signature. Inspect the QA stage log.");
+                        }
+                    }
                     ui.label("Windows/B-Trust may be waiting for its own PIN dialog.");
                     ui.label("The document is being signed and verified in a background worker.");
                     ui.label("Do not repeat the request or close the application until the provider returns.");
@@ -244,7 +271,10 @@ impl OfficeSignUi {
                 if self.phase == Phase::Choose {
                     ui.heading("Choose a certificate");
                     ui.checkbox(&mut self.allow_additional_signatures, "Allow additional signatures");
-                    ui.small("Turning this off sets a signed Craft-only policy. Microsoft Office may ignore that restriction.");
+                    ui.small("Turning this off requests a Craft-only restriction, not enforced by Microsoft Office.");
+                    if !self.allow_additional_signatures {
+                        ui.colored_label(egui::Color32::RED, "Restricted mode is disabled in this B-Trust QA build to avoid a hidden PIN helper.");
+                    }
                     ui.small("When enabled, another person can sign this document later without invalidating existing OPC signatures.");
                     ui.label("Windows Current User / Personal. The private key stays in its hardware or software provider.");
                     egui::ScrollArea::vertical().max_height(270.0).show(ui, |ui| {
@@ -269,7 +299,7 @@ impl OfficeSignUi {
                             self.rect = None;
                             self.phase = Phase::Confirm;
                         }
-                        if ui.add_enabled(can_draw, egui::Button::new("Optional screen guide")).clicked() {
+                        if ui.add_enabled(can_draw, egui::Button::new("Screen guide (NOT workbook cell)")).clicked() {
                             self.phase = Phase::Draw;
                         }
                         if ui.button("Cancel").clicked() { self.cancel() }
@@ -355,9 +385,12 @@ impl OfficeSignUi {
                     } else {
                         ui.small("Preview only: no graphic will be embedded. The resulting Office OPC signature will be invisible.");
                     }
-                    ui.small("Office-native Sign / Signature Setup on this image has not been independently verified.");
+                    ui.small("Visible image anchors at the selected XLSX cell, not a mouse-drawn screen rectangle; native Office Sign UI is NOT evaluated.");
                     ui.checkbox(&mut self.allow_additional_signatures, "Allow additional signatures");
-                    ui.small("Turning this off sets a signed Craft-only policy. Microsoft Office may ignore that restriction.");
+                    ui.small("Turning this off requests a Craft-only restriction, not enforced by Microsoft Office.");
+                    if !self.allow_additional_signatures {
+                        ui.colored_label(egui::Color32::RED, "Restricted mode is disabled in this B-Trust QA build to avoid a hidden PIN helper.");
+                    }
                     if !self.allow_additional_signatures && self.embed_visible_at_default_location {
                         ui.colored_label(egui::Color32::YELLOW,
                             "Craft-only restriction is not supported together with embedded visible appearance. Disable that appearance to sign with restriction.");
@@ -368,7 +401,7 @@ impl OfficeSignUi {
                         let anchor_is_valid = !self.embed_visible_at_default_location
                             || !file_ext.eq_ignore_ascii_case("xlsx")
                             || parse_excel_cell_anchor(&self.excel_anchor_cell).is_ok();
-                        let mode_compatible = self.allow_additional_signatures || !self.embed_visible_at_default_location;
+                        let mode_compatible = self.allow_additional_signatures;
                         if ui.add_enabled(anchor_is_valid && mode_compatible, egui::Button::new("Sign a separate copy")).clicked() { action = Some(Action::Sign) }
                         if ui.button("Cancel").clicked() { self.cancel() }
                     });
@@ -410,11 +443,10 @@ impl OfficeSignUi {
             if embed_visible {
                 return Err("Craft-only signature restriction cannot be combined with embedded appearance.".into());
             }
-            craft_signing_core::opc_windows::sign_office_document_with_policy(
-                original, &output, &cert.thumbprint, false,
-            )?;
-            craft_signing_core::opc_windows::verify_office_document(&output)?;
+            trace_ui_stage("unsupported_policy_rejected");
+            return Err("Restricted policy needs legacy PowerShell and is unavailable in QA.".into());
         } else if embed_visible {
+            trace_ui_stage("appearance_prepare_enter");
             let placement = if ext.eq_ignore_ascii_case("docx") {
                 OfficeImagePlacement::WordDocumentEnd
             } else {
@@ -423,11 +455,16 @@ impl OfficeSignUi {
             sign_with_visible_appearance(
                 original, &output, &cert.thumbprint, &self.appearance, placement,
             )?;
+            trace_ui_stage("appearance_sign_return");
         } else {
+            trace_ui_stage("invisible_sign_enter");
             sign_opc_inprocess(original, &output, &cert.thumbprint)?;
+            trace_ui_stage("invisible_sign_return");
         }
         // Fail closed: reopened independently; integrity is not eIDAS/QES.
+        trace_ui_stage("final_verify_enter");
         let _signatures = verify_opc_inprocess(&output)?;
+        trace_ui_stage("final_verify_return");
         self.cancel();
         let appearance_status = if !self.allow_additional_signatures {
             "Craft-only additional-signature restriction embedded. Microsoft Office is not required to honor this policy."
@@ -476,6 +513,19 @@ mod tests {
         s.phase = Phase::Signing;
         s.cancel();
         assert_eq!(s.phase, Phase::Signing);
+    }
+
+    #[test]
+    fn unsupported_restrictive_policy_fails_before_native_or_legacy_signer() {
+        let file = Path::new("synthetic.docx");
+        let mut s = OfficeSignUi::default();
+        s.phase = Phase::Confirm;
+        s.source = Some(file.to_path_buf());
+        s.allow_additional_signatures = false;
+        let err = s.start_sign(file).unwrap_err();
+        assert!(err.contains("legacy") || err.contains("hidden"));
+        assert!(s.sign_rx.is_none());
+        assert_eq!(s.phase, Phase::Confirm);
     }
 
     #[test]
