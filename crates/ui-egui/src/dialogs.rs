@@ -1486,9 +1486,9 @@ fn about(ui: &mut egui::Ui, d: &mut Dialog) {
             ui.heading("GridCraft");
             ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
             ui.add_space(4.0);
-            ui.label("A clean-room, open-source, Rust-native spreadsheet. Part of ArtCraft.");
-            ui.hyperlink_to("getartcraft.com/apps/gridcraft", "https://getartcraft.com/apps/gridcraft");
-            ui.hyperlink_to("Join the ArtCraft Discord", "https://discord.gg/artcraft");
+            ui.label("An independent Craft Open Source modification of GridCraft, based on the original project by the ArtCraft team.");
+            ui.hyperlink_to("Independent fork source", "https://github.com/Yanakiev432/gridcraft");
+            ui.hyperlink_to("Original GridCraft project", "https://github.com/storytold/gridcraft");
         }
     }
 }
