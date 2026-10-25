@@ -2101,7 +2101,11 @@ fn review(app: &mut SheetApp, ui: &mut Ui) {
     {
         sep(ui);
         let accent = Tokens::get(ui.ctx()).accent;
-        let ready = app.session.active().is_some_and(|d| !d.is_dirty() && d.path.is_some());
+        let xlsx_path = app.session.active().and_then(|d| d.path.as_ref()).is_some_and(|p| {
+            std::path::Path::new(p).extension().and_then(|x| x.to_str())
+                .is_some_and(|x| x.eq_ignore_ascii_case("xlsx"))
+        });
+        let ready = xlsx_path && app.session.active().is_some_and(|d| !d.is_dirty());
         let sign = egui::Button::new(egui::RichText::new("Sign\nB-Trust").strong().size(13.0))
             .fill(accent.gamma_multiply(0.18))
             .stroke(Stroke::new(1.0, accent.gamma_multiply(0.7)))
@@ -2109,7 +2113,7 @@ fn review(app: &mut SheetApp, ui: &mut Ui) {
             .min_size(vec2(108.0, 49.0));
         if ui
             .add_enabled(ready, sign)
-            .on_disabled_hover_text("Save the workbook before signing")
+            .on_disabled_hover_text("Signing requires a saved XLSX workbook with no pending changes. Use File > Save As > XLSX for CSV.")
             .on_hover_text("Choose a Windows certificate, review signing options, then sign a separate XLSX copy")
             .clicked()
         {
@@ -2124,7 +2128,7 @@ fn review(app: &mut SheetApp, ui: &mut Ui) {
             .stroke(Stroke::new(1.0, accent.gamma_multiply(0.45)))
             .corner_radius(9.0)
             .min_size(vec2(108.0, 49.0));
-        if ui.add_enabled(app.session.active().is_some(), verify).on_hover_text("Independently verify the saved XLSX OPC/XMLDSig integrity").clicked()
+        if ui.add_enabled(xlsx_path, verify).on_disabled_hover_text("Verify signature requires a saved XLSX workbook").on_hover_text("Independently verify the saved XLSX OPC/XMLDSig integrity").clicked()
         {
             if let Some(path) = app.session.active().and_then(|d| d.path.clone()) {
                 let result = craft_signing_core::opc_windows::verify_office_document(std::path::Path::new(&path));

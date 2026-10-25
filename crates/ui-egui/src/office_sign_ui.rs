@@ -47,7 +47,10 @@ impl OfficeSignUi {
             return Err("A certificate selection or signature operation is already active.".into());
         }
         if !path.is_file() {
-            return Err("Save the document before choosing a certificate.".into());
+            return Err("Save the workbook before choosing a certificate.".into());
+        }
+        if !path.extension().and_then(|x| x.to_str()).is_some_and(|x| x.eq_ignore_ascii_case("xlsx")) {
+            return Err("GridCraft can sign only saved XLSX workbooks. Use Save As > XLSX; CSV cannot carry an OPC digital signature.".into());
         }
         // Provider enumeration may call smart-card middleware: never block the GUI thread.
         let (tx, rx) = mpsc::channel();
@@ -440,6 +443,18 @@ impl OfficeSignUi {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn csv_is_rejected_before_certificate_provider_access() {
+        let path = std::env::temp_dir().join(format!("craft-sign-csv-{}.csv", std::process::id()));
+        std::fs::write(&path, b"header\nvalue\n").unwrap();
+        let mut dialog = OfficeSignUi::default();
+        let result = dialog.begin(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(result.unwrap_err().contains("XLSX"));
+        assert!(!dialog.active());
+        assert!(dialog.inventory_rx.is_none());
+    }
+
     #[test]
     fn certificate_discovery_requires_an_existing_saved_document() {
         let mut s = OfficeSignUi::default();
