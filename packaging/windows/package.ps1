@@ -24,6 +24,24 @@ param(
   [switch] $SkipBuild
 )
 $ErrorActionPreference = 'Stop'
+# WiX .NET tools may be installed privately alongside the user's .NET SDK.
+# A remote/non-interactive process can lack DOTNET_ROOT even when the runtime exists.
+# Resolve it only for this packaging process; do not install runtimes or change Windows globally.
+if (-not $env:DOTNET_ROOT) {
+  $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+  if ($dotnet) {
+    $candidate = Split-Path -Parent $dotnet.Source
+    if (Test-Path -LiteralPath (Join-Path $candidate 'shared\Microsoft.NETCore.App')) {
+      $env:DOTNET_ROOT = $candidate
+      if (-not $env:DOTNET_ROOT_X64) { $env:DOTNET_ROOT_X64 = $candidate }
+    }
+  }
+}
+if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
+  throw 'WiX v5 command not available; MSI cannot be packaged.'
+}
+& wix --version | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'WiX v5 cannot start; check DOTNET_ROOT/.NET runtime.' }
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 
 function Invoke-Native([string] $What, [scriptblock] $Block) {
