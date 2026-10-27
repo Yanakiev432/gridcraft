@@ -1145,13 +1145,26 @@ impl SheetApp {
                     now_ms(),
                 ));
             }
-            self.office_sign.draw(&ctx, self.grid.rect);
+            let active_sheet_index=self.session.active().map(|d|d.wb.active_sheet);
+            self.office_sign.draw(&ctx,self.grid.cells_rect,self.grid.geo.as_ref(),
+                self.session.active().and_then(|d|d.wb.active()),active_sheet_index);
             if let Some(office_sign_ui::Action::Sign) = self.office_sign.show(&ctx) {
                 let file = self.session.active().and_then(|d| d.path.clone());
-                let result = file.as_deref().ok_or("No saved workbook".to_owned()).and_then(|p| self.office_sign.start_sign(std::path::Path::new(p)));
+                let result = file.as_deref().ok_or("Save the XLSX workbook before signing.".to_owned())
+                    .and_then(|source| self.office_sign.check_ready_to_sign(std::path::Path::new(source))
+                        .map(|_|source.to_owned()))
+                    .and_then(|source|{
+                        let picker=self.services.pick_save.as_ref()
+                            .ok_or("Save As is not available in this GridCraft build. No signing has started.".to_owned())?;
+                        let stem=std::path::Path::new(&source).file_stem()
+                            .and_then(|s|s.to_str()).unwrap_or("Workbook");
+                        let output=picker(&format!("{stem}-signed.xlsx"))
+                            .ok_or("Save As cancelled. No signature was created.".to_owned())?;
+                        self.office_sign.start_sign(std::path::Path::new(&source),std::path::Path::new(&output))
+                    });
                 self.toast = Some((
                     match result {
-                        Ok(()) => "Digital signing started; complete any Windows provider PIN prompt.".to_owned(),
+                        Ok(()) => "Signing selected XLSX copy; any PIN prompt belongs to Windows/B-Trust.".to_owned(),
                         Err(error) => format!("Digital signature not started: {error}"),
                     },
                     now_ms(),
