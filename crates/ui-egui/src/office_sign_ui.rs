@@ -4,14 +4,15 @@
 //! It is not a native Excel signature-line control.
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::io::Write;
 
 use craft_signing_core::office_certificates::{OfficeCertificate, list_office_certificates};
 use craft_signing_core::office_appearance::OfficeSignatureAppearance;
 use craft_signing_core::office_visible_opc::OfficeImagePlacement;
-use craft_signing_core::office_visible_sign::sign_with_visible_appearance_with_policy;
-use craft_signing_core::opc_native::{sign_opc_inprocess_with_policy, verify_opc_inprocess};
+use craft_signing_core::office_visible_sign::sign_with_visible_appearance_with_policy_cancelable;
+use craft_signing_core::opc_native::{sign_opc_inprocess_with_policy_cancelable, verify_opc_inprocess};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum Phase {
@@ -40,6 +41,7 @@ pub struct OfficeSignUi {
     inventory_rx: Option<Receiver<Result<Vec<OfficeCertificate>, String>>>,
     sign_rx: Option<Receiver<Result<String, String>>>,
     sign_started: Option<Instant>,
+    sign_cancel: Option<Arc<AtomicBool>>,
 }
 pub enum Action {
     Sign,
@@ -131,9 +133,16 @@ impl OfficeSignUi {
     pub fn active(&self) -> bool {
         self.phase != Phase::Closed
     }
-    pub fn cancel(&mut self) {
-        // Never silently abandon an in-flight hardware-signing operation.
+    pub fn request_cancel_sign(&mut self) {
         if self.phase == Phase::Signing {
+            if let Some(flag)=&self.sign_cancel {flag.store(true,Ordering::SeqCst);}
+            self.notice=Some("Cancellation requested: terminating isolated signer; no new copy should be published.".into());
+        }
+    }
+    pub fn cancel(&mut self) {
+        // Do not dismiss the dialog until isolated worker shutdown completes.
+        if self.phase == Phase::Signing {
+            self.request_cancel_sign();
             return;
         }
         self.phase = Phase::Closed;
@@ -143,6 +152,7 @@ impl OfficeSignUi {
         self.inventory_rx = None;
         self.sign_rx = None;
         self.sign_started = None;
+        self.sign_cancel = None;
     }
     /// Poll the CNG/provider workers without blocking an egui frame.
     /// A result is returned once and must be surfaced by the host application.
@@ -168,6 +178,7 @@ impl OfficeSignUi {
             Some(Ok(result)) => {
                 self.sign_rx = None;
                 self.sign_started = None;
+        self.sign_cancel = None;
                 self.phase = Phase::Closed;
                 self.source = None;
                 return Some(result);
@@ -175,6 +186,7 @@ impl OfficeSignUi {
             Some(Err(TryRecvError::Disconnected)) => {
                 self.sign_rx = None;
                 self.sign_started = None;
+        self.sign_cancel = None;
                 self.phase = Phase::Closed;
                 self.source = None;
                 return Some(Err("Hardware signing worker disconnected; inspect the output folder before retrying".into()));
@@ -213,18 +225,21 @@ impl OfficeSignUi {
         Self::check_destination(current,output)?;
         trace_ui_stage("save_as_destination_confirmed");
         trace_ui_stage(if self.allow_additional_signatures { "multiple_signature_mode" } else { "craft_final_signature_mode" });
+        let cancel=Arc::new(AtomicBool::new(false));
+        let worker_cancel=Arc::clone(&cancel);
         let mut request = std::mem::take(self);
         let src = current.to_path_buf();
         let dst = output.to_path_buf();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| request.sign(&src,&dst)))
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| request.sign_cancelable(&src,&dst,&worker_cancel)))
                 .unwrap_or_else(|_| Err("Signature worker failed; inspect the output before retry.".into()));
             let _ = tx.send(result);
         });
         self.phase = Phase::Signing;
         self.sign_rx = Some(rx);
         self.sign_started = Some(Instant::now());
+        self.sign_cancel=Some(cancel);
         Ok(())
     }
     pub fn screen_rectangle(&self) -> Option<egui::Rect> {
@@ -305,7 +320,7 @@ impl OfficeSignUi {
             egui::Window::new("Digital signature in progress")
                 .collapsible(false).resizable(false).show(ctx, |ui| {
                     ui.spinner();
-                    ui.label("GridCraft QA V31 — native XLSX signing");
+                    ui.label("GridCraft QA V35 — native XLSX signing");
                     if let Some(started) = self.sign_started {
                         let elapsed = started.elapsed().as_secs();
                         ui.label(format!("Elapsed: {elapsed} s"));
@@ -315,7 +330,9 @@ impl OfficeSignUi {
                     }
                     ui.label("Windows/B-Trust may be waiting for its own PIN dialog.");
                     ui.label("The document is being signed and verified in a background worker.");
-                    ui.label("Do not repeat the request or close the application until the provider returns.");
+                    ui.label("The isolated signer will be terminated after 180 seconds at most.");
+                    if ui.button("Cancel signing").clicked() {self.request_cancel_sign();}
+                    if let Some(message)=&self.notice {ui.colored_label(egui::Color32::YELLOW,message);}
                 });
             return None;
         }
@@ -465,6 +482,11 @@ impl OfficeSignUi {
         action
     }
     pub fn sign(&mut self, current: &Path, output: &Path) -> Result<String,String> {
+        let never=AtomicBool::new(false);
+        self.sign_cancelable(current,output,&never)
+    }
+    fn sign_cancelable(&mut self,current:&Path,output:&Path,cancel:&AtomicBool) -> Result<String,String> {
+        if cancel.load(Ordering::SeqCst){return Err("Signature cancelled before starting".into());}
         if self.phase != Phase::Confirm { return Err("Confirm the certificate and signing choices.".into()); }
         let original=self.source.as_ref().ok_or("No source workbook")?;
         if original != current { return Err("The opened XLSX workbook changed.".into()); }
@@ -477,19 +499,19 @@ impl OfficeSignUi {
         if self.embed_visible_at_default_location {
             let region=self.excel_region.ok_or("Draw a signature rectangle on worksheet 1 first.")?;
             trace_ui_stage("appearance_prepare_enter");
-            sign_with_visible_appearance_with_policy(
+            sign_with_visible_appearance_with_policy_cancelable(
                 original,output,&cert.thumbprint,&self.appearance,
                 OfficeImagePlacement::ExcelRectangle {
                     column:region.column,row:region.row,
                     col_offset:region.col_offset,row_offset:region.row_offset,
                     width:region.width,height:region.height,
                 },
-                self.allow_additional_signatures,
+                self.allow_additional_signatures,cancel,
             )?;
             trace_ui_stage("appearance_sign_return");
         } else {
             trace_ui_stage("invisible_sign_enter");
-            sign_opc_inprocess_with_policy(original,output,&cert.thumbprint,self.allow_additional_signatures)?;
+            sign_opc_inprocess_with_policy_cancelable(original,output,&cert.thumbprint,self.allow_additional_signatures,cancel)?;
             trace_ui_stage("invisible_sign_return");
         }
         trace_ui_stage("verify_opc_enter");
@@ -506,6 +528,17 @@ impl OfficeSignUi {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cancel_button_requests_hard_worker_termination_without_closing_dialog() {
+        let mut dialog=OfficeSignUi::default();
+        dialog.phase=Phase::Signing;
+        let marker=Arc::new(AtomicBool::new(false));
+        dialog.sign_cancel=Some(Arc::clone(&marker));
+        dialog.cancel();
+        assert!(marker.load(Ordering::SeqCst));
+        assert_eq!(dialog.phase,Phase::Signing);
+    }
+
     #[test]
     fn pointer_drag_maps_to_real_xlsx_cell_and_dimensions() {
         let sheet=gridcraft_engine::model::Sheet::new("Sheet1");
