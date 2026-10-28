@@ -474,6 +474,7 @@ impl OfficeSignUi {
                     ui.checkbox(&mut self.excel_manual_calc_consent,
                         "I accept MANUAL calculation in the new signed XLSX (original remains unchanged)");
                     ui.small("Formula results in the signed copy may become stale. Recalculate the UNSIGNED source first, then sign. This choice does not change the source or every Excel workbook.");
+                    ui.small("Important: Excel uses one calculation mode across all open workbooks. To verify: launch Excel with no other workbooks, select Formulas > Calculation Options > Manual, then open the signed XLSX. Opening an automatic workbook first can invalidate the signature.");
                     ui.label("The Windows certificate provider will request your PIN if necessary. Never enter your PIN into Craft.");
                     ui.horizontal(|ui| {
                         if ui.button("Back").clicked() { self.phase = Phase::Choose }
@@ -548,7 +549,7 @@ impl OfficeSignUi {
         })();
         let _=std::fs::remove_file(&prepared);
         result?;
-        let msg=format!("Signed copy: {}. V39 consented manual calculation; original XLSX preserved. OPC verification PASS; eIDAS QES and broad Microsoft Excel compatibility not assessed.",output.display());
+        let msg=format!("Signed copy: {}. V39 consented manual calculation; original XLSX preserved. OPC verification PASS. To inspect in Excel, first start Excel with no workbook open, select Formulas > Calculation Options > Manual, then open this signed copy. Excel uses the first workbook calculation mode for all others. eIDAS QES and broad Excel compatibility NOT assessed.",output.display());
         self.cancel();
         Ok(msg)
     }
