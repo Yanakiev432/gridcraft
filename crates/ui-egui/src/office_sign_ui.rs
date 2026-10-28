@@ -13,6 +13,7 @@ use craft_signing_core::office_appearance::OfficeSignatureAppearance;
 use craft_signing_core::office_visible_opc::OfficeImagePlacement;
 use craft_signing_core::office_visible_sign::sign_with_visible_appearance_with_policy_cancelable;
 use craft_signing_core::opc_native::{sign_opc_inprocess_with_policy_cancelable, verify_opc_inprocess};
+use craft_signing_core::office_excel_calc::prepare_xlsx_for_excel_signing;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum Phase {
@@ -30,6 +31,7 @@ pub struct OfficeSignUi {
     certificates: Vec<OfficeCertificate>,
     selected: Option<usize>,
     allow_additional_signatures: bool,
+    excel_manual_calc_consent: bool,
     appearance: OfficeSignatureAppearance,
     embed_visible_at_default_location: bool,
     excel_anchor_cell: String,
@@ -85,6 +87,7 @@ impl OfficeSignUi {
         self.certificates.clear();
         self.selected = None;
         self.allow_additional_signatures = false;
+        self.excel_manual_calc_consent = false;
         self.appearance = OfficeSignatureAppearance::default();
         self.embed_visible_at_default_location = true; // XLSX fixed-cell visible appearance, not screen rectangle.
         self.excel_anchor_cell = "E2".to_owned();
@@ -196,6 +199,9 @@ impl OfficeSignUi {
         None
     }
     pub fn check_ready_to_sign(&self, current: &Path) -> Result<(), String> {
+        if !self.excel_manual_calc_consent {
+            return Err("Before signing, explicitly accept manual recalculation in the NEW signed copy. The source XLSX is preserved.".into())
+        }
         if self.phase != Phase::Confirm || self.source.as_deref() != Some(current) {
             return Err("Select a certificate for the current saved XLSX file.".into());
         }
@@ -463,10 +469,15 @@ impl OfficeSignUi {
                     } else {
                         ui.small("Additional signatures may be added.");
                     }
+                    ui.colored_label(egui::Color32::YELLOW,
+                        "Excel compatibility: automatic recalculation made the V37 XML signature invalid in Office. Manual mode was accepted in V38.");
+                    ui.checkbox(&mut self.excel_manual_calc_consent,
+                        "I accept MANUAL calculation in the new signed XLSX (original remains unchanged)");
+                    ui.small("Formula results in the signed copy may become stale. Recalculate the UNSIGNED source first, then sign. This choice does not change the source or every Excel workbook.");
                     ui.label("The Windows certificate provider will request your PIN if necessary. Never enter your PIN into Craft.");
                     ui.horizontal(|ui| {
                         if ui.button("Back").clicked() { self.phase = Phase::Choose }
-                        let ready=self.selected.is_some() &&
+                        let ready=self.excel_manual_calc_consent && self.selected.is_some() &&
                             (!self.embed_visible_at_default_location || self.excel_region.is_some());
                         if ui.add_enabled(ready, egui::Button::new("Choose signed XLSX location...")).clicked() {
                             trace_ui_stage("save_as_button_clicked");
@@ -496,29 +507,48 @@ impl OfficeSignUi {
         if !cert.has_private_key || !cert.valid_now {
             return Err("The chosen certificate is not eligible.".into());
         }
-        if self.embed_visible_at_default_location {
-            let region=self.excel_region.ok_or("Draw a signature rectangle on worksheet 1 first.")?;
-            trace_ui_stage("appearance_prepare_enter");
-            sign_with_visible_appearance_with_policy_cancelable(
-                original,output,&cert.thumbprint,&self.appearance,
-                OfficeImagePlacement::ExcelRectangle {
-                    column:region.column,row:region.row,
-                    col_offset:region.col_offset,row_offset:region.row_offset,
-                    width:region.width,height:region.height,
-                },
-                self.allow_additional_signatures,cancel,
-            )?;
-            trace_ui_stage("appearance_sign_return");
-        } else {
-            trace_ui_stage("invisible_sign_enter");
-            sign_opc_inprocess_with_policy_cancelable(original,output,&cert.thumbprint,self.allow_additional_signatures,cancel)?;
-            trace_ui_stage("invisible_sign_return");
+        if !self.excel_manual_calc_consent {
+            return Err("V39 requires explicit manual recalculation consent before the provider is invoked.".into());
         }
-        trace_ui_stage("verify_opc_enter");
-        let count=verify_opc_inprocess(output)?;
-        trace_ui_stage("verify_opc_return");
-        if count == 0 { return Err("No OPC signature present after signing.".into()); }
-        let msg=format!("Signed copy: {}. Cryptographic OPC verification PASS; eIDAS QES and Microsoft Excel compatibility not assessed.",output.display());
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH)
+            .map_err(|e| e.to_string())?.as_nanos();
+        let prepared = output.with_file_name(format!(
+            ".craft-v39-calc-{}-{stamp}.xlsx",std::process::id()));
+        if prepared.exists() { return Err("V39 unsigned staging collision".into()); }
+        trace_ui_stage("excel_manual_prepare_enter");
+        let result=(|| {
+            prepare_xlsx_for_excel_signing(original,&prepared)?;
+            trace_ui_stage("excel_manual_prepare_return");
+            if cancel.load(Ordering::SeqCst){
+                return Err("V39 signing cancelled after unsigned preparation".into());
+            }
+            if self.embed_visible_at_default_location {
+                let region=self.excel_region.ok_or("Draw a signature rectangle on worksheet 1 first.")?;
+                trace_ui_stage("appearance_prepare_enter");
+                sign_with_visible_appearance_with_policy_cancelable(
+                    &prepared,output,&cert.thumbprint,&self.appearance,
+                    OfficeImagePlacement::ExcelRectangle {
+                        column:region.column,row:region.row,
+                        col_offset:region.col_offset,row_offset:region.row_offset,
+                        width:region.width,height:region.height,
+                    },
+                    self.allow_additional_signatures,cancel,
+                )?;
+                trace_ui_stage("appearance_sign_return");
+            } else {
+                trace_ui_stage("invisible_sign_enter");
+                sign_opc_inprocess_with_policy_cancelable(&prepared,output,&cert.thumbprint,self.allow_additional_signatures,cancel)?;
+                trace_ui_stage("invisible_sign_return");
+            }
+            trace_ui_stage("verify_opc_enter");
+            let count=verify_opc_inprocess(output)?;
+            trace_ui_stage("verify_opc_return");
+            if count == 0 { return Err("No OPC signature present after signing.".into()); }
+            Ok::<(),String>(())
+        })();
+        let _=std::fs::remove_file(&prepared);
+        result?;
+        let msg=format!("Signed copy: {}. V39 consented manual calculation; original XLSX preserved. OPC verification PASS; eIDAS QES and broad Microsoft Excel compatibility not assessed.",output.display());
         self.cancel();
         Ok(msg)
     }
@@ -614,6 +644,14 @@ mod tests {
         assert!(ui.allow_additional_signatures);
         ui.set_lock_after_signing(true);
         assert!(!ui.allow_additional_signatures);
+    }
+    #[test]
+    fn manual_calculation_requires_explicit_consent() {
+        let mut dialog=OfficeSignUi::default();
+        assert!(!dialog.excel_manual_calc_consent);
+        assert!(dialog.check_ready_to_sign(Path::new("demo.xlsx")).is_err());
+        dialog.excel_manual_calc_consent=true;
+        assert!(dialog.check_ready_to_sign(Path::new("demo.xlsx")).is_err()); // no certificate
     }
     #[test]
     fn save_as_will_never_overwrite_a_workbook() {
