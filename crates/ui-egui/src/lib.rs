@@ -1164,7 +1164,7 @@ impl SheetApp {
                     });
                 self.toast = Some((
                     match result {
-                        Ok(()) => "Signing selected XLSX copy; any PIN prompt belongs to Windows/B-Trust.".to_owned(),
+                        Ok(()) => "Signing selected XLSX copy. External .p7s for automatic mode; native XML-DSig for manual. Any PIN prompt belongs to Windows/B-Trust.".to_owned(),
                         Err(error) => format!("Digital signature not started: {error}"),
                     },
                     now_ms(),

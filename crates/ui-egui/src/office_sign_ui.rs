@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::io::Write;
+use std::io::{Read, Write};
+use std::process::{Command, Stdio};
+use std::fs::{File,OpenOptions};
 
 use craft_signing_core::office_certificates::{OfficeCertificate, list_office_certificates};
 use craft_signing_core::office_appearance::OfficeSignatureAppearance;
@@ -27,6 +29,7 @@ enum Phase {
 }
 #[derive(Default)]
 pub struct OfficeSignUi {
+    signature_mode: XlsxSignatureMode,
     phase: Phase,
     certificates: Vec<OfficeCertificate>,
     selected: Option<usize>,
@@ -42,6 +45,7 @@ pub struct OfficeSignUi {
     pub notice: Option<String>,
     inventory_rx: Option<Receiver<Result<Vec<OfficeCertificate>, String>>>,
     sign_rx: Option<Receiver<Result<String, String>>>,
+    verify_rx: Option<Receiver<Result<String, String>>>,
     sign_started: Option<Instant>,
     sign_cancel: Option<Arc<AtomicBool>>,
 }
@@ -52,6 +56,84 @@ pub enum Action {
 struct ExcelRegion {
     column: u32, row: u32, col_offset: u32, row_offset: u32,
     width: u32, height: u32,
+}
+
+#[derive(Clone,Copy,Debug,PartialEq,Eq,Default)]
+enum XlsxSignatureMode {
+    #[default]
+    DetachedAutomatic,
+    NativeOfficeManual,
+}
+
+fn same_bytes(first: &Path, second: &Path) -> Result<bool,String> {
+    let mut a=File::open(first).map_err(|e|e.to_string())?;
+    let mut b=File::open(second).map_err(|e|e.to_string())?;
+    if a.metadata().map_err(|e|e.to_string())?.len()!=b.metadata().map_err(|e|e.to_string())?.len(){
+        return Ok(false);
+    }
+    let (mut a_buf,mut b_buf)=([0u8;65536],[0u8;65536]);
+    loop {
+        let n=a.read(&mut a_buf).map_err(|e|e.to_string())?;
+        if n==0 {return Ok(b.read(&mut b_buf).map_err(|e|e.to_string())?==0);}
+        b.read_exact(&mut b_buf[..n]).map_err(|e|e.to_string())?;
+        if a_buf[..n]!=b_buf[..n] {return Ok(false);}
+    }
+}
+fn cms_sidecar_path(output:&Path) -> Result<PathBuf,String> {
+    let name=output.file_name().and_then(|x|x.to_str()).ok_or("Invalid XLSX file name")?;
+    Ok(output.with_file_name(format!("{name}.p7s")))
+}
+fn bounded_cms_worker(exe:&Path,args:&[&std::ffi::OsStr],cancel:&AtomicBool) -> Result<(),String>{
+    let mut child=Command::new(exe).args(args).stdin(Stdio::null())
+        .stdout(Stdio::null()).stderr(Stdio::null()).spawn()
+        .map_err(|e|format!("Cannot start independent CMS helper: {e}"))?;
+    let start=Instant::now();
+    loop {
+        if cancel.load(Ordering::SeqCst) || start.elapsed()>Duration::from_secs(180){
+            let _=child.kill();let _=child.wait();
+            return Err("CMS signing cancelled or 180s deadline reached".into());
+        }
+        match child.try_wait().map_err(|e|e.to_string())?{
+            Some(status) if status.success()=>return Ok(()),
+            Some(status)=>return Err(format!("CMS sign/verify exited {status}; no accepted signature")),
+            None=>std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+}
+fn sign_detached_automatic(original:&Path,output:&Path,thumbprint:&str,cancel:&AtomicBool)
+    -> Result<String,String>{
+    if cancel.load(Ordering::SeqCst){return Err("Cancelled before signing".into());}
+    let helper=std::env::current_exe().map_err(|e|e.to_string())?
+        .with_file_name("craft-xlsx-cms.exe");
+    if !helper.is_file(){return Err("Automatic XLSX detached CMS signer missing from the GridCraft installation".into());}
+    let sidecar=cms_sidecar_path(output)?;
+    if sidecar.exists(){return Err("Existing .p7s sidecar: refuse overwrite".into());}
+    let mut created_xlsx=false;
+    let result=(||{
+        let mut input=File::open(original).map_err(|e|e.to_string())?;
+        let mut result=OpenOptions::new().write(true).create_new(true).open(output)
+            .map_err(|e|format!("Create new signed XLSX copy: {e}"))?;
+        created_xlsx=true;
+        std::io::copy(&mut input,&mut result).map_err(|e|e.to_string())?;
+        result.sync_all().map_err(|e|e.to_string())?;
+        drop(result);
+        if !same_bytes(original,output)?{return Err("XLSX source changed while being copied".into());}
+        if cancel.load(Ordering::SeqCst){return Err("Cancelled after copying XLSX".into());}
+        let sign_args=[std::ffi::OsStr::new("sign"),output.as_os_str(),sidecar.as_os_str(),
+            std::ffi::OsStr::new(thumbprint)];
+        bounded_cms_worker(&helper,&sign_args,cancel)?;
+        if !same_bytes(original,output)?{return Err("Input XLSX changed during CMS signing".into());}
+        let verify_args=[std::ffi::OsStr::new("verify"),output.as_os_str(),sidecar.as_os_str()];
+        bounded_cms_worker(&helper,&verify_args,cancel)?;
+        Ok::<(),String>(())
+    })();
+    if let Err(e)=result{
+        if sidecar.exists() { let _=std::fs::remove_file(&sidecar); }
+        if created_xlsx {let _=std::fs::remove_file(output);}
+        return Err(e);
+    }
+    Ok(format!("Automatic XLSX preserved: {}. Independent detached CMS signature: {}. Verification PASS. This external signature is NOT shown in Excel's Signatures pane. Trust and QES not assessed.",
+        output.display(),sidecar.display()))
 }
 
 /// Local QA breadcrumbs. Only event labels and UTC millisecond timestamps are recorded.
@@ -88,6 +170,7 @@ impl OfficeSignUi {
         self.selected = None;
         self.allow_additional_signatures = false;
         self.excel_manual_calc_consent = false;
+        self.signature_mode = XlsxSignatureMode::DetachedAutomatic;
         self.appearance = OfficeSignatureAppearance::default();
         self.embed_visible_at_default_location = true; // XLSX fixed-cell visible appearance, not screen rectangle.
         self.excel_anchor_cell = "E2".to_owned();
@@ -98,6 +181,32 @@ impl OfficeSignUi {
         self.phase = Phase::Loading;
         self.inventory_rx = Some(rx);
         self.notice = None;
+        self.verify_rx = None;
+        Ok(())
+    }
+    pub fn detached_mode(&self)->bool {self.signature_mode==XlsxSignatureMode::DetachedAutomatic}
+    fn verify_cms_sidecar_in_background(&mut self) -> Result<(),String> {
+        if self.verify_rx.is_some(){return Err("Verification is already running".into());}
+        let original=self.source.clone().ok_or("No saved workbook selected")?;
+        let paired=cms_sidecar_path(&original)?;
+        if !paired.is_file(){return Err(format!("No paired signature exists: {}",paired.display()));}
+        let helper=std::env::current_exe().map_err(|e|e.to_string())?
+            .with_file_name("craft-xlsx-cms.exe");
+        if !helper.is_file(){return Err("Missing CMS verifier helper".into());}
+        let (tx,rx)=mpsc::channel();
+        std::thread::Builder::new().name("craft-detached-cms-verify".into()).spawn(move||{
+            let result=Command::new(helper).arg("verify").arg(&original).arg(&paired)
+                .stdin(Stdio::null()).stderr(Stdio::null()).output()
+                .map_err(|e|e.to_string()).and_then(|r|{
+                    if !r.status.success(){return Err("Detached CMS signature invalid, missing or no longer matches XLSX".into());}
+                    let info=String::from_utf8_lossy(&r.stdout);
+                    if !info.contains("CMS_DETACHED_VERIFY=PASS"){return Err("Unexpected CMS verifier result".into());}
+                    Ok(format!("Detached CMS verification PASS for {}; trust and eIDAS QES not evaluated.",original.display()))
+                });
+            let _=tx.send(result);
+        }).map_err(|e|e.to_string())?;
+        self.verify_rx=Some(rx);
+        self.notice=Some("Verifying paired .xlsx.p7s against workbook bytes...".into());
         Ok(())
     }
     fn lock_after_signing(&self) -> bool { !self.allow_additional_signatures }
@@ -199,8 +308,8 @@ impl OfficeSignUi {
         None
     }
     pub fn check_ready_to_sign(&self, current: &Path) -> Result<(), String> {
-        if !self.excel_manual_calc_consent {
-            return Err("Before signing, explicitly accept manual recalculation in the NEW signed copy. The source XLSX is preserved.".into())
+        if self.signature_mode==XlsxSignatureMode::NativeOfficeManual && !self.excel_manual_calc_consent {
+            return Err("Native Office signing requires explicit manual-calculation acceptance".into())
         }
         if self.phase != Phase::Confirm || self.source.as_deref() != Some(current) {
             return Err("Select a certificate for the current saved XLSX file.".into());
@@ -210,7 +319,7 @@ impl OfficeSignUi {
         if !cert.has_private_key || !cert.valid_now {
             return Err("The selected certificate is not available for signing.".into());
         }
-        if self.embed_visible_at_default_location && self.excel_region.is_none() {
+        if self.signature_mode==XlsxSignatureMode::NativeOfficeManual && self.embed_visible_at_default_location && self.excel_region.is_none() {
             return Err("Draw the signature rectangle on worksheet 1 first.".into());
         }
         Ok(())
@@ -227,6 +336,7 @@ impl OfficeSignUi {
         Ok(())
     }
     pub fn start_sign(&mut self, current: &Path, output: &Path) -> Result<(), String> {
+        if self.verify_rx.is_some(){return Err("Finish CMS verification before starting another signature".into());}
         self.check_ready_to_sign(current)?;
         Self::check_destination(current,output)?;
         trace_ui_stage("save_as_destination_confirmed");
@@ -234,6 +344,7 @@ impl OfficeSignUi {
         let cancel=Arc::new(AtomicBool::new(false));
         let worker_cancel=Arc::clone(&cancel);
         let mut request = std::mem::take(self);
+        self.signature_mode=request.signature_mode; // preserve progress-dialog label
         let src = current.to_path_buf();
         let dst = output.to_path_buf();
         let (tx, rx) = mpsc::channel();
@@ -311,6 +422,19 @@ impl OfficeSignUi {
     /// Choose a Digital ID and confirm its provider-controlled signature.
     /// A visible Excel signature requires a real worksheet rectangle.
     pub fn show(&mut self, ctx: &egui::Context) -> Option<Action> {
+        if let Some(rx)=&self.verify_rx {
+            match rx.try_recv(){
+                Ok(result)=>{
+                    self.notice=Some(match result {Ok(msg)=>msg,Err(err)=>format!("CMS verification FAIL: {err}")});
+                    self.verify_rx=None;
+                },
+                Err(TryRecvError::Disconnected)=>{
+                    self.notice=Some("CMS verifier worker disconnected".into());
+                    self.verify_rx=None;
+                },
+                Err(TryRecvError::Empty)=>ctx.request_repaint_after(Duration::from_millis(120)),
+            }
+        }
         if self.phase == Phase::Loading {
             ctx.request_repaint_after(Duration::from_millis(120));
             egui::Window::new("Reading Windows certificates")
@@ -326,7 +450,9 @@ impl OfficeSignUi {
             egui::Window::new("Digital signature in progress")
                 .collapsible(false).resizable(false).show(ctx, |ui| {
                     ui.spinner();
-                    ui.label("GridCraft QA V35 — native XLSX signing");
+                    ui.label(if self.signature_mode==XlsxSignatureMode::DetachedAutomatic {
+                       "GridCraft — automatic XLSX with external .p7s CMS signature"
+                   } else {"GridCraft — native Office XML-DSig signing"});
                     if let Some(started) = self.sign_started {
                         let elapsed = started.elapsed().as_secs();
                         ui.label(format!("Elapsed: {elapsed} s"));
@@ -356,8 +482,16 @@ impl OfficeSignUi {
             .show(ctx, |ui| {
                 if self.phase == Phase::Choose {
                     ui.heading("Choose a certificate");
+                    ui.label("To check an automatic XLSX, open the matching .xlsx and click Verify paired .p7s.");
+                    if ui.button("Verify paired .xlsx.p7s (no certificate or PIN needed)").clicked(){
+                        if let Err(e)=self.verify_cms_sidecar_in_background(){
+                            self.notice=Some(format!("Verification unavailable: {e}"));
+                        }
+                    }
+                    if let Some(message)=&self.notice {ui.colored_label(egui::Color32::YELLOW,message);}
+
                     let mut lock=self.lock_after_signing();
-                    if ui.checkbox(&mut lock,"Lock document after signing").changed() {
+                    if ui.checkbox(&mut lock,"Native Office only: Lock document after signing").changed() {
                         self.set_lock_after_signing(lock);
                     }
                     ui.small("With lock: Craft refuses further signatures; other Office programs may ignore this rule.");
@@ -385,7 +519,8 @@ impl OfficeSignUi {
                             self.rect = None;
                             self.phase = Phase::Confirm;
                         }
-                        if ui.add_enabled(can_draw, egui::Button::new("Draw signature rectangle on worksheet")).clicked() {
+                        if ui.add_enabled(can_draw && self.signature_mode==XlsxSignatureMode::NativeOfficeManual,
+                            egui::Button::new("Draw native signature rectangle on worksheet")).clicked() {
                             self.phase=Phase::Draw;self.notice=None;self.drag_start=None;
                             trace_ui_stage("excel_rectangle_mode");
                         }
@@ -394,6 +529,17 @@ impl OfficeSignUi {
                 } else {
                     let c = self.selected.and_then(|i| self.certificates.get(i));
                     ui.label(format!("Certificate: {}",c.map_or("Missing",|c|c.subject.as_str())));
+                    ui.separator();
+                    ui.label("Signature format:");
+                    ui.radio_value(&mut self.signature_mode,XlsxSignatureMode::DetachedAutomatic,
+                        "Automatic (recommended): preserve XLSX exactly + independent CMS .p7s");
+                    ui.radio_value(&mut self.signature_mode,XlsxSignatureMode::NativeOfficeManual,
+                        "Native Office XML-DSig: visible in Excel, requires Manual calculation");
+                    if self.signature_mode==XlsxSignatureMode::DetachedAutomatic {
+                        ui.colored_label(egui::Color32::YELLOW,
+                            "The XLSX remains automatic and unchanged. A companion .xlsx.p7s contains the detached cryptographic signature.");
+                        ui.small("Excel's Signatures pane will NOT show this external signature. Verify both files together with GridCraft/CMS verifier. Never separate them.");
+                    } else {
                     if let Some(region)=self.excel_region {
                         ui.label(format!("Worksheet 1: anchor {}, {:.0} x {:.0} px at 96 dpi",
                             self.excel_anchor_cell,region.width as f32/9525.0,region.height as f32/9525.0));
@@ -461,7 +607,7 @@ impl OfficeSignUi {
                     }
                     ui.small("The image will be inserted at the drawn XLSX position, BEFORE the package is signed.");
                     let mut lock=self.lock_after_signing();
-                    if ui.checkbox(&mut lock,"Lock document after signing").changed(){
+                    if ui.checkbox(&mut lock,"Native Office only: Lock document after signing").changed(){
                         self.set_lock_after_signing(lock);
                     }
                     if lock {
@@ -475,12 +621,15 @@ impl OfficeSignUi {
                         "I accept MANUAL calculation in the new signed XLSX (original remains unchanged)");
                     ui.small("Formula results in the signed copy may become stale. Recalculate the UNSIGNED source first, then sign. This choice does not change the source or every Excel workbook.");
                     ui.small("Important: Excel uses one calculation mode across all open workbooks. To verify: launch Excel with no other workbooks, select Formulas > Calculation Options > Manual, then open the signed XLSX. Opening an automatic workbook first can invalidate the signature.");
+                    }
                     ui.label("The Windows certificate provider will request your PIN if necessary. Never enter your PIN into Craft.");
                     ui.horizontal(|ui| {
                         if ui.button("Back").clicked() { self.phase = Phase::Choose }
-                        let ready=self.excel_manual_calc_consent && self.selected.is_some() &&
-                            (!self.embed_visible_at_default_location || self.excel_region.is_some());
-                        if ui.add_enabled(ready, egui::Button::new("Choose signed XLSX location...")).clicked() {
+                        let ready=self.selected.is_some() && (self.signature_mode==XlsxSignatureMode::DetachedAutomatic ||
+                            (self.excel_manual_calc_consent && (!self.embed_visible_at_default_location || self.excel_region.is_some())));
+                        if ui.add_enabled(ready, egui::Button::new(
+                            if self.signature_mode==XlsxSignatureMode::DetachedAutomatic {"Choose new XLSX + .p7s location..."}
+                            else {"Choose new native-signed XLSX location..."})).clicked() {
                             trace_ui_stage("save_as_button_clicked");
                             action=Some(Action::Sign);
                         }
@@ -508,8 +657,11 @@ impl OfficeSignUi {
         if !cert.has_private_key || !cert.valid_now {
             return Err("The chosen certificate is not eligible.".into());
         }
+        if self.signature_mode==XlsxSignatureMode::DetachedAutomatic {
+            return sign_detached_automatic(original,output,&cert.thumbprint,cancel);
+        }
         if !self.excel_manual_calc_consent {
-            return Err("V39 requires explicit manual recalculation consent before the provider is invoked.".into());
+            return Err("Native Office signing requires explicit manual calculation consent.".into());
         }
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH)
             .map_err(|e| e.to_string())?.as_nanos();
@@ -670,7 +822,24 @@ mod tests {
     }
 
     #[test]
-    fn closed_state_will_not_sign() {
+    fn automatic_signature_helpers_check_sidecar_and_byte_integrity() {
+        let mut ui=OfficeSignUi::default();
+        assert!(ui.detached_mode());
+        ui.signature_mode=XlsxSignatureMode::NativeOfficeManual;
+        assert!(!ui.detached_mode());
+        assert_eq!(cms_sidecar_path(Path::new("a.xlsx")).unwrap(),PathBuf::from("a.xlsx.p7s"));
+        let root=std::env::temp_dir().join(format!("craft-cms-test-{}",std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let source=root.join("original.xlsx");
+        let copy=root.join("copy.xlsx");
+        std::fs::write(&source,b"synthetic").unwrap();
+        std::fs::write(&copy,b"synthetic").unwrap();
+        assert!(same_bytes(&source,&copy).unwrap());
+        std::fs::write(&copy,b"tampered!").unwrap();
+        assert!(!same_bytes(&source,&copy).unwrap());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]    fn closed_state_will_not_sign() {
         let mut s = OfficeSignUi::default();
         assert!(!s.active());
         assert!(s.sign(Path::new("nonexistent.xlsx"),Path::new("out.xlsx")).is_err());
