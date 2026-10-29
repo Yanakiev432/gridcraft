@@ -1,0 +1,36 @@
+{
+  "schema": "craft.gridcraft.v45.external.office.acceptance.v1",
+  "observed_on": "2026-10-29",
+  "source": "Two user-provided screenshots from Microsoft Excel desktop, signed and intentionally tampered variants",
+  "positive": {
+    "file": "GridCraft_V45_Multi_Formula_Native_Signed.xlsx",
+    "sha256": "92D34E316D25569698AD70F9B6C754D0C19D21D4BA462955FB3F8558E8550D9A",
+    "signature_status": "Recoverable signature",
+    "details": "A trust decision has not been made for the signer's certificate",
+    "signer": "CRAFT-V45-EPHEMERAL-QA-UNTRUSTED",
+    "type": "XML-DSig",
+    "values_visible": {
+      "B1": 5,
+      "C1": 10,
+      "D1": 30,
+      "E1": 34,
+      "F1": 4,
+      "G1": 38
+    },
+    "result": "PASS_NATIVE_SIGNATURE_RECOGNIZED"
+  },
+  "negative": {
+    "file": "GridCraft_V45_Multi_Formula_Tampered_Expected_Invalid.xlsx",
+    "sha256": "54D9D623A2DC04021A8219C4747CAADCD3F6F0D041FFD1D8FAD8768A42C6B5B8",
+    "signature_status": "Invalid signatures",
+    "details": "Invalid signature - The signed content or the signature has been modified",
+    "result": "PASS_TAMPER_DETECTION"
+  },
+  "qualification": {
+    "excel_open_order_automatic_for_this_specific_image": "NOT_DEMONSTRATED",
+    "real_BTrust": "NOT_TESTED",
+    "qualified_eIDAS": "NOT_TESTED",
+    "public_release": "NO_GO"
+  },
+  "note": "The screenshots are user-provided evidence; not a direct automated Excel session on Lenovo."
+}
