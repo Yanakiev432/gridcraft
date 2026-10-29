@@ -404,29 +404,20 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
         out.part("xl/persons/person.xml", Some(CT_PERSONS), x.into_bytes());
         wb_rels.add_uri(REL_PERSON, "persons/person.xml");
     }
-    // An Excel-authored workbook with a single scalar formula can safely carry
-    // a regenerated calculation chain after GridCraft serializes its cells.
-    // Never carry the OLD chain through arbitrary edits (stale references),
-    // and never fabricate one for complicated dependency graphs.
-    if wb.calc.engine_id.is_some() && !out.needs_calc && !wb.calc.iterative {
-        let formula_cells: Vec<(usize, gridcraft_core::CellRef)> = wb.sheets.iter()
-            .enumerate().flat_map(|(sheet_index, sheet)| {
-                sheet.cells.iter().filter_map(move |(coord, cell)| {
-                    let formula=cell.formula.as_deref()?;
-                    (formula.array.is_none() && !cell.value.is_empty()
-                      && !sheet.spill_ranges.contains_key(&coord)).then_some((sheet_index,coord))
-                })
-            }).collect();
-        let formula_count=wb.sheets.iter().map(|sheet|sheet.cells.iter()
-            .filter(|(_,cell)|cell.formula.is_some()).count()).sum::<usize>();
-        if formula_count==1 && formula_cells.len()==1 {
-            let (index, coord)=formula_cells[0];
-            let xml=format!("{XML_DECL}<calcChain xmlns=\"{NS_MAIN}\"><c r=\"{}\" i=\"{}\"/></calcChain>",
-                coord, kept.file_index(index)+1);
+    // A calculation chain is emitted ONLY after checking every scalar formula,
+    // its numeric cached result, the dependency graph and possible cycles.
+    // Unsupported expressions and stale cached values cannot produce a chain.
+    if !out.needs_calc {
+        if let Some(plan) = crate::office_auto_graph::validated_chain(wb) {
+            let mut xml = format!("{XML_DECL}<calcChain xmlns=\"{NS_MAIN}\">");
+            for (sheet_index, coord) in plan.ordered {
+                let _ = write!(xml, "<c r=\"{coord}\" i=\"{}\"/>", kept.file_index(sheet_index) + 1);
+            }
+            xml.push_str("</calcChain>");
             out.part("xl/calcChain.xml",
                 Some("application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml"),
                 xml.into_bytes());
-            wb_rels.add("calcChain","calcChain.xml");
+            wb_rels.add("calcChain", "calcChain.xml");
         }
     }
     out.part("xl/workbook.xml", Some(kind.main_content_type()), w.into_bytes());

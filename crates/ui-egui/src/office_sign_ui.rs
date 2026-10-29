@@ -535,7 +535,7 @@ impl OfficeSignUi {
                     ui.radio_value(&mut self.signature_mode,XlsxSignatureMode::DetachedAutomatic,
                         "Automatic (recommended): preserve XLSX exactly + independent CMS .p7s");
                     ui.radio_value(&mut self.signature_mode,XlsxSignatureMode::NativeOfficeAutomatic,
-                        "Native Excel XML-DSig (Automatic): V43B compatible; needs Excel calculation chain");
+                        "Native Excel XML-DSig (Automatic): verified arithmetic graph + Excel chain");
                     ui.radio_value(&mut self.signature_mode,XlsxSignatureMode::NativeOfficeManual,
                         "Native Office XML-DSig (Manual): fallback for other workbooks");
                     if self.signature_mode==XlsxSignatureMode::DetachedAutomatic {
@@ -619,7 +619,7 @@ impl OfficeSignUi {
                         ui.small("Additional signatures may be added.");
                     }
                     if self.signature_mode==XlsxSignatureMode::NativeOfficeAutomatic {
-                        ui.label("V43B-compatible native Automatic signature. Input must already include a valid Excel calcId and calcChain; unsupported workbooks fail closed.");
+                        ui.label("Native Automatic requires a real Excel calcId, dependency-ordered calcChain, and verified arithmetic caches (up to 256 formulas). Unsupported expressions fail closed.");
                         ui.small("Visible in Excel Signatures. Tested in one Excel environment with Book1 already open. Other versions and workbooks require QA.");
                     } else {
                     ui.colored_label(egui::Color32::YELLOW,
@@ -695,7 +695,7 @@ impl OfficeSignUi {
             let count=verify_opc_inprocess(output)?;
             if count==0{return Err("No native OPC digital signature after signing".into());}
             self.cancel();
-            return Ok(format!("Native Office XML-DSig: {}. V43B-compatible Automatic metadata preserved. Windows OPC PASS; Microsoft Excel and QES status not assessed for THIS output.",
+            return Ok(format!("Native Office XML-DSig: {}. Conservative native Automatic formula graph validated. Windows OPC PASS; Microsoft Excel and QES status not assessed for THIS output.",
                 output.display()));
         }
         if !self.excel_manual_calc_consent {

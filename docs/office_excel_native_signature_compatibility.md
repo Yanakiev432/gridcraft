@@ -105,3 +105,37 @@ remain NO-GO pending independent validation.
   by Microsoft Excel until tested on the separate Office computer.
 - This is still a private development branch; no MSI replacement, public
   publishing, physical B-Trust use or QES representation.
+
+
+## V45 - controlled multi-formula calculation graph (2026-10-29)
+
+The V44 single-formula limit has been extended ONLY for a provable subset:
+
+- Maximum 256 cached, nonvolatile numeric scalar formulas.
+- Direct cell references within each formula's own sheet; unrelated supported
+  formulas may exist on multiple independent sheets.
+- Numbers, parentheses, unary plus/minus and binary +, -, *, /.
+- Every formula result is independently recalculated from referenced cached
+  numeric values and checked with a bounded floating-point tolerance.
+- Dependencies are sorted topologically. Circular references, missing values,
+  inconsistent caches and graphs that cannot be proven are rejected.
+- calcChain.xml is emitted only when the WHOLE graph qualifies.
+- Native Office Automatic preflight verifies complete coverage and dependency
+  ordering in the package calcChain.xml; duplicates, missing and out-of-order
+  entries fail closed.
+- Unsupported SUM, volatile functions, arrays, ranges, named references,
+  structured references, and cross-sheet dependencies inside one formula
+  remain outside the verified V45 subset.
+
+QA on Lenovo: A four-formula test generated from a previously obtained
+Excel-authored unsigned workbook (calcId=162913) was signed using the real
+GridCraft native signing code path and a temporary untrusted RSA-SHA256
+certificate. Windows OPC signature verification returned Success.
+A copied XLSX was modified after signing; Windows OPC then returned
+InvalidSignature. The ephemeral software test certificate and helper
+placed in the test executable directory were removed.
+
+NOT YET CONFIRMED: This V45 multi-formula output in actual Microsoft Excel
+desktop. Previous V44 single-formula output has positive AND negative
+external Excel screenshot acceptance. No real B-Trust, QES or unbounded
+Excel formula compatibility claim.

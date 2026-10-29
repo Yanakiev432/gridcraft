@@ -23,6 +23,7 @@ mod fmla;
 mod ods;
 mod package;
 pub mod office_auto;
+mod office_auto_graph;
 #[cfg(test)]
 mod office_auto_tests;
 mod passthrough;
