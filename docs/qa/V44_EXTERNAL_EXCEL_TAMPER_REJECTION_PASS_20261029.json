@@ -1,0 +1,28 @@
+{
+  "schema": "craft.gridcraft.v44.external.excel.negative-control.v1",
+  "date": "2026-10-29",
+  "evidence": "User screenshot from Microsoft Excel showing GridCraft_V44_Tampered_Expected_Invalid.xlsx",
+  "workbook": "GridCraft_V44_Tampered_Expected_Invalid.xlsx",
+  "observed": {
+    "signature_pane": "Invalid signatures",
+    "signer": "CRAFT-V44-EPHEMERAL-QA-UNTRUSTED",
+    "details": "Invalid signature - The signed content or the signature has been modified. Contact the signer to re-sign the document.",
+    "result": "PASS_NEGATIVE"
+  },
+  "local_windows_opc": {
+    "source_original_sha256": "DECFFB4FD9B7B9A11BC5D21BA4456BB740CD4576A8F5D72EF911499C5F18C2D9",
+    "mutated_sha256": "07A8D49372495FD26B87ED50A9C2ADFABABBB707018086C5FBAFC3DF2A88B61D",
+    "mutated_part": "xl/workbook.xml calcId 162913 to 162914",
+    "original": "Success",
+    "tampered": "InvalidSignature",
+    "result": "PASS_NEGATIVE"
+  },
+  "acceptance": {
+    "microsoft_excel_native_signature_recognition": "PASS_POSITIVE_PRIOR_SCREENSHOT",
+    "microsoft_excel_tamper_rejection": "PASS_NEGATIVE_THIS_SCREENSHOT",
+    "qualifying_signer": "NOT_TESTED",
+    "all_formula_structures": "NOT_TESTED",
+    "other_excel_versions": "NOT_TESTED",
+    "public_release": "NO_GO"
+  }
+}
