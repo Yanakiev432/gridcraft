@@ -191,6 +191,116 @@ mod tests {
         assert_eq!(roundtrip.sheet(0).unwrap().cell(CellRef::parse("G1").unwrap()).unwrap().value,Value::Number(38.0));
     }
 
+
+    fn scalar(formula: &str, cache: f64) -> Cell {
+        let mut c=Cell::formula(Formula::new(formula));
+        c.value=Value::Number(cache);
+        c
+    }
+
+    #[test]
+    fn v46_sum_average_min_max_count_and_arithmetic_roundtrip() {
+        let mut wb=sample(Some(162913));
+        let sheet=wb.sheet_mut(0).unwrap();
+        sheet.cells.set(CellRef::parse("D1").unwrap(),Cell::value(Value::Number(20.0)));
+        sheet.cells.set(CellRef::parse("E1").unwrap(),scalar("=SUM(B1:D1)",35.0));
+        sheet.cells.set(CellRef::parse("F1").unwrap(),scalar("=AVERAGE(B1:D1)",35.0/3.0));
+        sheet.cells.set(CellRef::parse("G1").unwrap(),scalar("=MAX(B1:D1)-MIN(B1:D1)",15.0));
+        sheet.cells.set(CellRef::parse("H1").unwrap(),scalar("=COUNT(B1:D1)",3.0));
+        sheet.cells.set(CellRef::parse("I1").unwrap(),scalar("=SUM(E1,H1,5)",43.0));
+        let bytes=write_xlsx(&wb).unwrap();
+        native_auto_preflight(&bytes).unwrap();
+        let mut pkg=Package::open(&bytes).unwrap();
+        let chain=pkg.read_xml("xl/calcChain.xml").unwrap().unwrap();
+        let loc=chain.kids("c").filter_map(|c|c.attr("r")).collect::<Vec<_>>();
+        assert_eq!(loc,vec!["C1","E1","F1","G1","H1","I1"]);
+        let (again,report)=read_xlsx(&bytes).unwrap();
+        assert!(report.warnings.is_empty(),"{:?}",report.warnings);
+        assert_eq!(again.sheet(0).unwrap().cell(CellRef::parse("I1").unwrap()).unwrap().value,Value::Number(43.0));
+    }
+
+    #[test]
+    fn v46_explicit_cross_sheet_formula_dependency_topological_order() {
+        let mut wb=sample(Some(162913));
+        wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Budget")));
+        wb.sheet_mut(0).unwrap().cells.set(CellRef::parse("D1").unwrap(),scalar("=Budget!C1+5",26.0));
+        let other=wb.sheet_mut(1).unwrap();
+        other.cells.set(CellRef::parse("B1").unwrap(),Cell::value(Value::Number(7.0)));
+        other.cells.set(CellRef::parse("C1").unwrap(),scalar("=B1*3",21.0));
+        let bytes=write_xlsx(&wb).unwrap();
+        native_auto_preflight(&bytes).unwrap();
+        let mut pkg=Package::open(&bytes).unwrap();
+        let chain=pkg.read_xml("xl/calcChain.xml").unwrap().unwrap();
+        let loc=chain.kids("c").map(|c|(c.attr("r").unwrap(),c.attr("i").unwrap())).collect::<Vec<_>>();
+        assert_eq!(loc,vec![("C1","1"),("C1","2"),("D1","1")]);
+    }
+
+    #[test]
+    fn v46_range_missing_values_or_unsupported_volatile_fail_closed() {
+        let mut wb=sample(Some(162913));
+        wb.sheet_mut(0).unwrap().cells.set(CellRef::parse("D1").unwrap(),scalar("=SUM(B1:E1)",15.0));
+        assert!(native_auto_preflight(&write_xlsx(&wb).unwrap()).is_err());
+        let mut wb=sample(Some(162913));
+        wb.sheet_mut(0).unwrap().cells.set(CellRef::parse("D1").unwrap(),scalar("=NOW()",46323.0));
+        assert!(native_auto_preflight(&write_xlsx(&wb).unwrap()).is_err());
+        let mut wb=sample(Some(162913));
+        wb.sheet_mut(0).unwrap().cells.set(CellRef::parse("D1").unwrap(),scalar("=SUM(B1:B2000)",20.0));
+        assert!(native_auto_preflight(&write_xlsx(&wb).unwrap()).is_err());
+    }
+
+    #[test]
+    fn v46_cross_sheet_cycle_and_stale_aggregate_are_blocked() {
+        let mut wb=sample(Some(162913));
+        wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Budget")));
+        wb.sheet_mut(0).unwrap().cells.set(CellRef::parse("D1").unwrap(),scalar("=Budget!C1+1",12.0));
+        wb.sheet_mut(1).unwrap().cells.set(CellRef::parse("C1").unwrap(),scalar("=Sheet1!D1-1",11.0));
+        assert!(native_auto_preflight(&write_xlsx(&wb).unwrap()).is_err());
+        let mut wb=sample(Some(162913));
+        wb.sheet_mut(0).unwrap().cells.set(CellRef::parse("D1").unwrap(),Cell::value(Value::Number(10.0)));
+        wb.sheet_mut(0).unwrap().cells.set(CellRef::parse("E1").unwrap(),scalar("=SUM(B1:D1)",999.0));
+        assert!(native_auto_preflight(&write_xlsx(&wb).unwrap()).is_err());
+    }
+    /// Opt-in private V46 fixture from a real Excel-authored workbook.
+    /// Input is read-only, and output uses create_new (no overwrite).
+    #[test]
+    #[ignore = "requires CRAFT_V46_EXCEL_SOURCE and CRAFT_V46_QA_OUTPUT"]
+    fn v46_generate_excel_authored_aggregates_cross_sheet_unsigned_qa() {
+        let source=std::env::var("CRAFT_V46_EXCEL_SOURCE").expect("QA source path");
+        let dest=std::env::var("CRAFT_V46_QA_OUTPUT").expect("QA output path");
+        let before=std::fs::read(&source).unwrap();
+        native_auto_preflight(&before).unwrap();
+        let (mut book, _report)=read_xlsx(&before).unwrap();
+        assert_eq!(book.calc.engine_id,Some(162913));
+        {
+            let sheet=book.sheet_mut(0).unwrap();
+            sheet.cells.set(CellRef::parse("D1").unwrap(),Cell::value(Value::Number(20.0)));
+            sheet.cells.set(CellRef::parse("E1").unwrap(),scalar("=SUM(B1:D1)",35.0));
+            sheet.cells.set(CellRef::parse("F1").unwrap(),scalar("=AVERAGE(B1:D1)",35.0/3.0));
+            sheet.cells.set(CellRef::parse("G1").unwrap(),scalar("=MAX(B1:D1)-MIN(B1:D1)",15.0));
+            sheet.cells.set(CellRef::parse("H1").unwrap(),scalar("=COUNT(B1:D1)",3.0));
+            sheet.cells.set(CellRef::parse("I1").unwrap(),scalar("=Budget!C1+E1",56.0));
+            sheet.cells.set(CellRef::parse("J1").unwrap(),scalar("=SUM(Budget!B1:C1)",28.0));
+            sheet.cells.set(CellRef::parse("K1").unwrap(),scalar("=I1+J1",84.0));
+        }
+        book.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Budget")));
+        {
+            let budget=book.sheet_mut(1).unwrap();
+            budget.cells.set(CellRef::parse("B1").unwrap(),Cell::value(Value::Number(7.0)));
+            budget.cells.set(CellRef::parse("C1").unwrap(),scalar("=B1*3",21.0));
+        }
+        let data=write_xlsx(&book).unwrap();
+        native_auto_preflight(&data).unwrap();
+        let mut out=std::fs::OpenOptions::new().write(true).create_new(true)
+            .open(&dest).unwrap();
+        std::io::Write::write_all(&mut out,&data).unwrap();
+        out.sync_all().unwrap();
+        assert_eq!(std::fs::read(&source).unwrap(),before);
+        let (again,_)=read_xlsx(&data).unwrap();
+        assert_eq!(again.sheets.len(),2);
+        assert_eq!(again.sheet(0).unwrap().cell(CellRef::parse("K1").unwrap()).unwrap().value,Value::Number(84.0));
+        assert_eq!(again.sheet(1).unwrap().cell(CellRef::parse("C1").unwrap()).unwrap().value,Value::Number(21.0));
+    }
+
     #[test]
     fn manual_or_recalc_flags_cannot_be_misrepresented_as_excel_auto() {
         let mut wb=sample(Some(162913));

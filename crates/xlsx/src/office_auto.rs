@@ -38,7 +38,7 @@ pub fn native_auto_preflight(bytes: &[u8]) -> Result<(), IoError> {
     }
     let (workbook, _warnings) = crate::read_xlsx(bytes)?;
     let verified = crate::office_auto_graph::validated_chain(&workbook).ok_or_else(|| {
-        IoError::Format("Native Automatic mode supports up to 256 nonvolatile scalar arithmetic formulas with consistent cached results and no cycles; this workbook does not qualify".into())
+        IoError::Format("Native Automatic mode requires at most 256 verified numeric formulas, supported arithmetic/aggregates, consistent caches, bounded ranges, no cycles and a complete calculation chain; this workbook does not qualify".into())
     })?;
     let mut sheet_ids = std::collections::BTreeMap::new();
     let sheets = book.path(&["sheets"]).ok_or_else(||

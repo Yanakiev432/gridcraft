@@ -139,3 +139,34 @@ NOT YET CONFIRMED: This V45 multi-formula output in actual Microsoft Excel
 desktop. Previous V44 single-formula output has positive AND negative
 external Excel screenshot acceptance. No real B-Trust, QES or unbounded
 Excel formula compatibility claim.
+
+
+## V46 - bounded aggregates and cross-sheet dependencies (2026-10-29)
+
+V45 positive and tamper-negative tests were independently confirmed in
+Microsoft Excel desktop screenshots from the user on 2026-10-29:
+native V45 XML-DSig was Recoverable due to the deliberately untrusted
+temporary certificate; a single-byte signed XML change was Invalid.
+
+V46 safely extends the proven graph to:
+- SUM, AVERAGE, MIN, MAX and COUNT with bounded numeric scalar arguments and
+  explicit numeric rectangular ranges of at most 1024 cells.
+- Explicitly named other sheets in scalar formulas and in aggregate ranges.
+- Topologically ordered dependencies across sheets and across supported
+  scalar aggregate formulas.
+- Complete cached-value re-evaluation and finite number checks.
+- Conservative rejection of blanks, text, nonnumeric range cells, missing
+  sheets, 3D ranges, unsupported names, volatile functions, arrays, circular
+  references, unsupported operators and overly large arguments.
+- Up to 256 supported formula cells; fail closed for other cases.
+
+V46 fixture consists of an Excel-authored underlying workbook with
+calcId 162913 and two worksheets. Its SUM/AVERAGE/MIN/MAX/COUNT and
+cross-sheet formulas have cached numeric results checked before signing.
+Independent external Microsoft Excel acceptance of the V46 signed fixture
+is required; the Windows OPC verifier alone cannot prove it.
+Temporary QA certificate is software-only, created and deleted in the
+controlled synthetic signing test. No B-Trust, PIN, or qualified claim.
+
+The installed Craft Suite and existing V44/V45 QA artifacts are untouched.
+This is a private feature worktree and release remains NO_GO.

@@ -619,7 +619,7 @@ impl OfficeSignUi {
                         ui.small("Additional signatures may be added.");
                     }
                     if self.signature_mode==XlsxSignatureMode::NativeOfficeAutomatic {
-                        ui.label("Native Automatic requires a real Excel calcId, dependency-ordered calcChain, and verified arithmetic caches (up to 256 formulas). Unsupported expressions fail closed.");
+                        ui.label("Native Automatic requires Excel calcId and a dependency-ordered calcChain. Up to 256 verified numeric formulas: arithmetic, SUM/AVERAGE/MIN/MAX/COUNT and bounded numeric ranges, including named-sheet dependencies. Unsupported content fails closed.");
                         ui.small("Visible in Excel Signatures. Tested in one Excel environment with Book1 already open. Other versions and workbooks require QA.");
                     } else {
                     ui.colored_label(egui::Color32::YELLOW,

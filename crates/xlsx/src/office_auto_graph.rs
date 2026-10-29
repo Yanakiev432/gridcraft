@@ -1,6 +1,6 @@
 //! Conservative dependency-validated Excel calculation chain for native XMLDSig.
 //!
-//! Only a small, nonvolatile scalar-arithmetic subset is accepted. Any
+//! Only a bounded, nonvolatile numeric subset is accepted. Any
 //! unrecognized expression, unsupported reference, circular graph, missing
 //! cached result, or mismatched cache FAILS CLOSED. A calcChain is never
 //! invented for a workbook that claims to need calculation.
@@ -123,6 +123,85 @@ pub(crate) fn validated_chain(wb: &Workbook) -> Option<ValidatedChain> {
     Some(ValidatedChain { ordered, dependencies: deps })
 }
 
+const MAX_RANGE_CELLS: u64 = 1024;
+
+/// Resolve a local or single explicitly named sheet reference. No 3D ranges,
+/// external books, implicit sheet fallbacks or ambiguous sheet names.
+fn resolve_sheet(sel: &SheetSel, wb: &Workbook, current: usize) -> Option<usize> {
+    match sel {
+        SheetSel::Current => Some(current),
+        SheetSel::Named(name) => wb.sheet_index(name),
+        SheetSel::Span(_, _) => None,
+    }
+}
+
+fn value_from_cell(
+    wb: &Workbook, sheet: usize, pos: CellRef,
+    deps: &mut BTreeSet<FormulaKey>,
+) -> Option<f64> {
+    let cell = wb.sheet(sheet)?.cell(pos)?;
+    if cell.formula.is_some() {
+        deps.insert((sheet, pos));
+    }
+    match cell.value {
+        Value::Number(n) if n.is_finite() => Some(n),
+        // Excel SUM() ignores blank or text in a cell reference, but V46
+        // deliberately refuses those cases unless we prove exact semantics.
+        _ => None,
+    }
+}
+
+fn supported_range(
+    r: &gridcraft_formula::Reference,
+    wb: &Workbook,
+    current: usize,
+    deps: &mut BTreeSet<FormulaKey>,
+) -> Option<Vec<f64>> {
+    let sheet = resolve_sheet(&r.sheet, wb, current)?;
+    let RefKind::Range(a, b) = &r.kind else { return None; };
+    let rows = u64::from(a.row.max(b.row) - a.row.min(b.row)) + 1;
+    let cols = u64::from(a.col.max(b.col) - a.col.min(b.col)) + 1;
+    if rows.checked_mul(cols)? > MAX_RANGE_CELLS {
+        return None;
+    }
+    let mut values = Vec::with_capacity(rows as usize * cols as usize);
+    for row in a.row.min(b.row)..=a.row.max(b.row) {
+        for col in a.col.min(b.col)..=a.col.max(b.col) {
+            values.push(value_from_cell(wb, sheet, CellRef::new(row, col), deps)?);
+        }
+    }
+    Some(values)
+}
+
+fn evaluate_aggregate(
+    name: &str, args: &[Expr], wb: &Workbook, current: usize, depth: usize,
+    deps: &mut BTreeSet<FormulaKey>,
+) -> Option<f64> {
+    if args.is_empty() || args.len() > 64 { return None; }
+    if !matches!(name, "SUM" | "AVERAGE" | "MIN" | "MAX" | "COUNT") {
+        return None;
+    }
+    let mut values = Vec::new();
+    for expr in args {
+        match expr {
+            Expr::Ref(r) if matches!(&r.kind, RefKind::Range(..)) =>
+                values.extend(supported_range(r, wb, current, deps)?),
+            _ => values.push(evaluate(expr, wb, current, depth + 1, deps)?),
+        }
+        if values.len() > MAX_RANGE_CELLS as usize { return None; }
+    }
+    if values.is_empty() { return None; }
+    let n = match name {
+        "SUM" => values.iter().copied().sum(),
+        "AVERAGE" => values.iter().copied().sum::<f64>() / values.len() as f64,
+        "COUNT" => values.len() as f64,
+        "MIN" => values.iter().copied().reduce(f64::min)?,
+        "MAX" => values.iter().copied().reduce(f64::max)?,
+        _ => return None,
+    };
+    n.is_finite().then_some(n)
+}
+
 fn evaluate(
     expr: &Expr, wb: &Workbook, sheet: usize, depth: usize,
     deps: &mut BTreeSet<FormulaKey>,
@@ -148,21 +227,15 @@ fn evaluate(
             }
         }
         Expr::Ref(r) => {
-            let (SheetSel::Current, RefKind::Cell(anchor)) = (&r.sheet, &r.kind)
-                else { return None; };
-            let cell_ref = anchor.cell();
-            let cell = wb.sheet(sheet)?.cell(cell_ref)?;
-            if cell.formula.is_some() {
-                deps.insert((sheet, cell_ref));
-            }
-            match cell.value {
-                Value::Number(number) => number,
-                _ => return None,
-            }
+            let RefKind::Cell(anchor) = &r.kind else { return None; };
+            let target = resolve_sheet(&r.sheet, wb, sheet)?;
+            value_from_cell(wb, target, anchor.cell(), deps)?
         }
-        // Names, structured references, range references, functions (including
-        // volatile calls), dynamic arrays, and cross-sheet dependencies are NOT
-        // supported by this constrained native Automatic calculation path.
+        Expr::Call(name, args) =>
+            evaluate_aggregate(name, args, wb, sheet, depth, deps)?,
+        // Dynamic array, external, structured, name references, implicit
+        // intersection, volatile functions and non-arithmetic operators are
+        // never assumed to be compatible with a native Excel signature.
         _ => return None,
     };
     n.is_finite().then_some(n)
