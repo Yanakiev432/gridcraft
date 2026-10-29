@@ -1,0 +1,47 @@
+{
+  "schema": "craft.gridcraft.v44.microsoft_excel_external_interop.v1",
+  "date": "2026-10-29",
+  "source": "Screenshot supplied by user in chat, depicting Microsoft Excel desktop and Signature Details for exact V44 artifact",
+  "screenshot_observation": {
+    "workbook": "GridCraft_V44_Native_Excel_Automatic_Signed_QA.xlsx",
+    "application": "Microsoft Excel desktop",
+    "read_only": true,
+    "signed_ui": "This document is signed.",
+    "office_banner": "This document contains recoverable signatures.",
+    "signature_pane": "Recoverable error",
+    "signatory": "CRAFT-V44-EPHEMERAL-QA-UNTRUSTED",
+    "signature_type": "XML-DSig",
+    "signature_details": "Recoverable signature - A trust decision has not been made for the signer's certificate.",
+    "not_observed": [
+      "Invalid signature",
+      "Document content has been modified"
+    ],
+    "excel_calculation_mode_in_this_screenshot": "NOT SHOWN"
+  },
+  "source_artifact": {
+    "sha256": "DECFFB4FD9B7B9A11BC5D21BA4456BB740CD4576A8F5D72EF911499C5F18C2D9",
+    "signing_engine": "GridCraft V44 synthetic software-only QA",
+    "certificate": "Ephemeral self-signed, intentionally untrusted, removed after signing"
+  },
+  "acceptance": {
+    "microsoft_excel_recognizes_native_v44_xml_dsig": "PASS",
+    "microsoft_excel_signature_pane_recognizes_signer": "PASS",
+    "no_invalid_signature_indicator_visible": "PASS",
+    "signature_trust": "UNTRUSTED_BY_DESIGN",
+    "automatic_calculation_mode_visibly_proven_in_v44_screenshot": "NO",
+    "automatic_mode_workbook_engine_metadata_and_calc_chain": "PASS_FROM_PREVIOUS_WINDOWS_SOURCE_AUDIT",
+    "tamper_negative_test_windows_opc": "PASS",
+    "tamper_result": "InvalidSignature",
+    "general_excel_auto_calculation_stable_on_all_opening_orders": "NOT_PROVEN",
+    "qes": "NOT_TESTED",
+    "btrust_hardware": "NOT_TESTED",
+    "public_release": "NO_GO_PENDING_BROADER_QA"
+  },
+  "negative_control": {
+    "path": "C:\\Users\\User\\Documents\\CRAFT_NATIVE_EXCEL_V44_QA_20261029\\GridCraft_V44_Native_Excel_TAMPER_NEGATIVE_QA.xlsx",
+    "sha256": "07A8D49372495FD26B87ED50A9C2ADFABABBB707018086C5FBAFC3DF2A88B61D",
+    "unsigned_mutation": "xl/workbook.xml calcId 162913 -> 162914, signed output changed on QA copy only",
+    "validation": "Windows OPC VerifySignatures(false) returned InvalidSignature",
+    "original_hash_unchanged": true
+  }
+}
