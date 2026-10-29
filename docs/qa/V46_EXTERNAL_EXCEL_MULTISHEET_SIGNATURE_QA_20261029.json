@@ -1,0 +1,51 @@
+{
+  "schema": "craft.gridcraft.v46.qa.acceptance.v1",
+  "date": "2026-10-29",
+  "repo": "gridcraft-native-office-v46",
+  "branch": "feature/native-excel-formulas-v46-20261029",
+  "source_commit": "60a17bf412d74696d45df315e741d53cceab9b80",
+  "technical_scope": "Native Excel Automatic XMLDSig with bounded 256-formula dependency graph, SUM/AVERAGE/MIN/MAX/COUNT numeric ranges, named-sheet references and checked caches",
+  "run_results": {
+    "xlsx_unit": "187 PASS, 0 FAIL, 2 opt-in QA tests ignored",
+    "signing_ui_unit": "11 PASS, 0 FAIL, 1 opt-in QA test ignored",
+    "excel_authored_unsigned_generator": "PASS - opt-in real source",
+    "native_software_visible_signature_test": "PASS - opt-in full signing path, QA certificate removed",
+    "windows_opc_sign": "Success",
+    "windows_opc_tamper": "InvalidSignature",
+    "temp_software_certificate_deleted": "PASS",
+    "temporary_worker_deleted": "PASS",
+    "original_unsigned_source_unchanged": "PASS",
+    "app_binary_build": "PASS",
+    "final_GUI_launch_and_graceful_close": "PASS"
+  },
+  "artifacts": {
+    "signed_xlsx": {
+      "path": "C:\\Users\\User\\Documents\\CRAFT_NATIVE_EXCEL_V46_QA_20261029\\GridCraft_V46_Aggregates_CrossSheet_Native_Signed.xlsx",
+      "sha256": "427812BA872E0DAC05B201880DF82FD8309DB10D220EE6DD387CD7007BCD918C"
+    },
+    "tampered_xlsx": {
+      "path": "C:\\Users\\User\\Documents\\CRAFT_NATIVE_EXCEL_V46_QA_20261029\\GridCraft_V46_Aggregates_CrossSheet_TAMPER_EXPECTED_INVALID.xlsx",
+      "sha256": "1769C15491F44152A0540B5AE778AD78B34AAA7C2D991C26EF9B06D0769CE89F"
+    },
+    "staged_app": {
+      "path": "C:\\Users\\User\\Documents\\CraftDevBuilds\\GridCraft-V46-Aggregates-CrossSheet-NativeAuto-QA\\gridcraft.exe",
+      "sha256": "81446A45ABE2C425ECBCAEEBEA0A1B3DAC103F090D87440F945C8AD7CA15FB8F"
+    }
+  },
+  "external_office": {
+    "V45_positive_and_tampered": "PASS in user-provided Microsoft Excel screenshots",
+    "V46_positive_and_tampered": "PENDING user-side Microsoft Excel check"
+  },
+  "uncertainties": {
+    "MS_Excel_automatic_v46_all_open_order_scenarios": "NOT_PROVEN",
+    "qes": "NOT_TESTED",
+    "BTrust": "NOT_TESTED",
+    "all_excel_formula_features": "NOT_SUPPORTED"
+  },
+  "release": {
+    "MSI_changed": false,
+    "installed_Craft_Suite_changed": false,
+    "production_changes": false,
+    "public_release": "NO_GO"
+  }
+}
