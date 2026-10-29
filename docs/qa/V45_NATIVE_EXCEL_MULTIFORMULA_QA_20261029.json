@@ -1,0 +1,49 @@
+{
+  "schema": "craft.gridcraft.native-excel-automatic.v45.qa",
+  "date": "2026-10-29",
+  "repo": "gridcraft-native-auto-graph-v45",
+  "branch": "feature/native-excel-auto-graph-v45-20261029",
+  "implementation_commit": "c71060803b580cda3d35ec8d5afcd13c462bb62c",
+  "scope": "Up to 256 scalar numeric nonvolatile formulas, same-sheet cell references, arithmetic + - * /, across independent sheets; topological chain, cached-result checks",
+  "test_results": {
+    "xlsx_unit": "183 PASS, 0 FAIL, 1 ignored opt-in QA generator",
+    "signing_ui_unit": "11 PASS, 0 FAIL, 1 ignored opt-in synthetic signer",
+    "opt_in_qa_generator": "PASS",
+    "opt_in_real_native_visible_signer": "PASS software-only certificate, deleted afterward",
+    "windows_opc_original": "Success",
+    "windows_opc_tampered": "InvalidSignature",
+    "source_bytes_preserved": true,
+    "isolated_signing_worker_removed": true,
+    "app_build": "PASS",
+    "app_GUI_launch_responsive_close": "PASS",
+    "release_staging": "PASS"
+  },
+  "qa_documents": {
+    "unsigned": "C:\\Users\\User\\Documents\\CRAFT_NATIVE_EXCEL_V45_QA_20261029\\GridCraft_V45_Multi_Formula_Unsigned.xlsx",
+    "unsigned_sha256": "43233D05449DB50C95FB24BEAD8C2DAEA19664A5F4AC22294E1C8143B8D4240E",
+    "signed": "C:\\Users\\User\\Documents\\CRAFT_NATIVE_EXCEL_V45_QA_20261029\\GridCraft_V45_Multi_Formula_Native_Signed.xlsx",
+    "signed_sha256": "92D34E316D25569698AD70F9B6C754D0C19D21D4BA462955FB3F8558E8550D9A",
+    "tampered": "C:\\Users\\User\\Documents\\CRAFT_NATIVE_EXCEL_V45_QA_20261029\\GridCraft_V45_Multi_Formula_TAMPER_EXPECTED_INVALID.xlsx",
+    "tampered_sha256": "54D9D623A2DC04021A8219C4747CAADCD3F6F0D041FFD1D8FAD8768A42C6B5B8",
+    "calcId": 162913,
+    "formula_cells": {
+      "C1": "=B1*2 => 10",
+      "D1": "=C1*3 => 30",
+      "E1": "=D1+4 => 34",
+      "F1": "=B1-1 => 4",
+      "G1": "=E1+F1 => 38"
+    },
+    "native_OPC_XMLDSig": true
+  },
+  "staged_application": "C:\\Users\\User\\Documents\\CraftDevBuilds\\GridCraft-V45-MultiFormula-NativeAuto-QA",
+  "application_sha256": "C412F1F8D0BC54BEF162DE7AA3086E2CC4297A917B1AE740A6C43D42790ABE91",
+  "acceptance": {
+    "V44_office_positive_and_negative": "PASS verified by user screenshots",
+    "V45_office_automatic_multi_formula": "PENDING_DESKTOP_EXCEL_VERIFICATION",
+    "real_BTrust": "NOT_TESTED",
+    "qualified_eIDAS": "NOT_TESTED",
+    "unsupported_formula_structures": "FAIL_CLOSED",
+    "installed_craft_suite_modified": false,
+    "public_release": "NO_GO"
+  }
+}
