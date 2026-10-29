@@ -22,6 +22,11 @@ pub enum CalcMode {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CalcSettings {
     pub mode: CalcMode,
+    /// Excel's calc engine ID from the source XLSX. Preserve it, instead of substituting
+    /// a synthetic version number that can force recalculation and invalidate signatures.
+    /// None means GridCraft-created workbook (its own calculated caches need validation).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_id: Option<u32>,
     /// Enable iterative calculation: circular references are calculated repeatedly instead of
     /// reporting an error.
     pub iterative: bool,
@@ -37,6 +42,7 @@ impl Default for CalcSettings {
     fn default() -> Self {
         CalcSettings {
             mode: CalcMode::Automatic,
+            engine_id: None,
             iterative: false,
             max_iterations: Self::DEFAULT_ITERATIONS,
             max_change: Self::DEFAULT_CHANGE,

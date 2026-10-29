@@ -22,6 +22,9 @@ mod feature_bags;
 mod fmla;
 mod ods;
 mod package;
+pub mod office_auto;
+#[cfg(test)]
+mod office_auto_tests;
 mod passthrough;
 mod pivot;
 mod read;

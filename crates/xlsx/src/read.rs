@@ -176,6 +176,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     }
     wb.date_system = cx.date_system;
     if let Some(c) = wb_xml.child("calcPr") {
+        wb.calc.engine_id = c.attr_u32("calcId").filter(|&id| id > 0);
         wb.calc.mode = match c.attr("calcMode") {
             Some("manual") => CalcMode::Manual,
             Some("autoNoTable") => CalcMode::AutomaticExceptTables,

@@ -75,6 +75,33 @@ evidence of a malformed signature.
 
 ## Release decision
 
-**Native XMLDSig + Automatic, independent of Excel opening order: NOT ACCEPTED.**
+**Native XMLDSig + Automatic: V43B controlled Excel opening-order case PASS.
+V44 product integration is PRIVATE QA; its own signed output still requires
+independent Microsoft Excel acceptance. General Excel versions and formula
+graphs are not accepted.**
 Private development is allowed; public release / qualified signature claims
 remain NO-GO pending independent validation.
+
+## V44 implementation — 2026-10-29
+
+- GridCraft native Office Automatic XML-DSig is available as a third signing
+  mode, alongside detached CMS and native Manual. It never sets Manual.
+- Imported Excel calcId is preserved by the GridCraft workbook model, and
+  no fake Excel calcId is inserted for newly created workbooks.
+- A single ordinary formula with a cached value can have its calcChain
+  regenerated on GridCraft save; arbitrary formula dependencies are NOT
+  represented as supported, and V44 deliberately fails closed.
+- Native Automatic preflight rejects missing calcChain or relationship,
+  invalid/missing calcId, Manual calculation, forced full recalculation and
+  already-signed inputs. It signs only a NEW output path with Windows OPC.
+- Offline tests: GridCraft XLSX 178/178 PASS; UI 11/11 PASS; separate
+  opt-in full native visible-signature Rust E2E PASS with ephemeral imported
+  software-only QA certificate (removed after signing), Windows OPC PASS.
+- V44 synthetic signature is based on the Excel-authored controlled baseline:
+  workbook.xml and calcChain.xml bytes preserved. Visible signature adds a
+  drawing to the signed worksheet, as expected.
+- Real user's Excel screenshot proved V43B native Automatic recoverable,
+  with Book1 already open. V44 signed output is NOT independently accepted
+  by Microsoft Excel until tested on the separate Office computer.
+- This is still a private development branch; no MSI replacement, public
+  publishing, physical B-Trust use or QES representation.

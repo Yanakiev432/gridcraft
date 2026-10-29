@@ -325,7 +325,11 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
     if !names.is_empty() {
         let _ = write!(w, "<definedNames>{names}</definedNames>");
     }
-    w.push_str("<calcPr calcId=\"191029\"");
+    // Preserve imported Excel calculation IDs; never invent an engine version.
+    w.push_str("<calcPr");
+    if let Some(id) = wb.calc.engine_id {
+        let _ = write!(w, " calcId=\"{id}\"");
+    }
     match wb.calc.mode {
         CalcMode::Automatic => {}
         CalcMode::Manual => w.push_str(" calcMode=\"manual\""),
@@ -399,6 +403,31 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
         x.push_str("</personList>");
         out.part("xl/persons/person.xml", Some(CT_PERSONS), x.into_bytes());
         wb_rels.add_uri(REL_PERSON, "persons/person.xml");
+    }
+    // An Excel-authored workbook with a single scalar formula can safely carry
+    // a regenerated calculation chain after GridCraft serializes its cells.
+    // Never carry the OLD chain through arbitrary edits (stale references),
+    // and never fabricate one for complicated dependency graphs.
+    if wb.calc.engine_id.is_some() && !out.needs_calc && !wb.calc.iterative {
+        let formula_cells: Vec<(usize, gridcraft_core::CellRef)> = wb.sheets.iter()
+            .enumerate().flat_map(|(sheet_index, sheet)| {
+                sheet.cells.iter().filter_map(move |(coord, cell)| {
+                    let formula=cell.formula.as_deref()?;
+                    (formula.array.is_none() && !cell.value.is_empty()
+                      && !sheet.spill_ranges.contains_key(&coord)).then_some((sheet_index,coord))
+                })
+            }).collect();
+        let formula_count=wb.sheets.iter().map(|sheet|sheet.cells.iter()
+            .filter(|(_,cell)|cell.formula.is_some()).count()).sum::<usize>();
+        if formula_count==1 && formula_cells.len()==1 {
+            let (index, coord)=formula_cells[0];
+            let xml=format!("{XML_DECL}<calcChain xmlns=\"{NS_MAIN}\"><c r=\"{}\" i=\"{}\"/></calcChain>",
+                coord, kept.file_index(index)+1);
+            out.part("xl/calcChain.xml",
+                Some("application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml"),
+                xml.into_bytes());
+            wb_rels.add("calcChain","calcChain.xml");
+        }
     }
     out.part("xl/workbook.xml", Some(kind.main_content_type()), w.into_bytes());
     // A macro-free package can't hold a VBA project (Excel refuses such a file).

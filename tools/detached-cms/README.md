@@ -24,3 +24,11 @@ trusted timestamp and qualified eIDAS status are not established.
 Build: run Build.ps1 in this folder. Place the generated craft-xlsx-cms.exe
 beside gridcraft.exe. The existing craft-opc-worker.exe remains necessary for
 the native Office mode. QA-only: not a public release or an Authenticode signature.
+
+## V44 UI distinction
+
+GridCraft offers THREE signing modes, without claiming interchangeability:
+detached CMS for unchanged XLSX bytes; native Office Automatic (only
+Excel-authored-compatible source with calcId and calcChain preflight); native
+Office Manual as a fallback. The external .p7s remains separately verifiable
+and never appears as an embedded Office signature.

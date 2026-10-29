@@ -62,6 +62,7 @@ struct ExcelRegion {
 enum XlsxSignatureMode {
     #[default]
     DetachedAutomatic,
+    NativeOfficeAutomatic,
     NativeOfficeManual,
 }
 
@@ -319,7 +320,7 @@ impl OfficeSignUi {
         if !cert.has_private_key || !cert.valid_now {
             return Err("The selected certificate is not available for signing.".into());
         }
-        if self.signature_mode==XlsxSignatureMode::NativeOfficeManual && self.embed_visible_at_default_location && self.excel_region.is_none() {
+        if self.signature_mode!=XlsxSignatureMode::DetachedAutomatic && self.embed_visible_at_default_location && self.excel_region.is_none() {
             return Err("Draw the signature rectangle on worksheet 1 first.".into());
         }
         Ok(())
@@ -519,7 +520,7 @@ impl OfficeSignUi {
                             self.rect = None;
                             self.phase = Phase::Confirm;
                         }
-                        if ui.add_enabled(can_draw && self.signature_mode==XlsxSignatureMode::NativeOfficeManual,
+                        if ui.add_enabled(can_draw && self.signature_mode!=XlsxSignatureMode::DetachedAutomatic,
                             egui::Button::new("Draw native signature rectangle on worksheet")).clicked() {
                             self.phase=Phase::Draw;self.notice=None;self.drag_start=None;
                             trace_ui_stage("excel_rectangle_mode");
@@ -533,8 +534,10 @@ impl OfficeSignUi {
                     ui.label("Signature format:");
                     ui.radio_value(&mut self.signature_mode,XlsxSignatureMode::DetachedAutomatic,
                         "Automatic (recommended): preserve XLSX exactly + independent CMS .p7s");
+                    ui.radio_value(&mut self.signature_mode,XlsxSignatureMode::NativeOfficeAutomatic,
+                        "Native Excel XML-DSig (Automatic): V43B compatible; needs Excel calculation chain");
                     ui.radio_value(&mut self.signature_mode,XlsxSignatureMode::NativeOfficeManual,
-                        "Native Office XML-DSig: visible in Excel, requires Manual calculation");
+                        "Native Office XML-DSig (Manual): fallback for other workbooks");
                     if self.signature_mode==XlsxSignatureMode::DetachedAutomatic {
                         ui.colored_label(egui::Color32::YELLOW,
                             "The XLSX remains automatic and unchanged. A companion .xlsx.p7s contains the detached cryptographic signature.");
@@ -615,6 +618,10 @@ impl OfficeSignUi {
                     } else {
                         ui.small("Additional signatures may be added.");
                     }
+                    if self.signature_mode==XlsxSignatureMode::NativeOfficeAutomatic {
+                        ui.label("V43B-compatible native Automatic signature. Input must already include a valid Excel calcId and calcChain; unsupported workbooks fail closed.");
+                        ui.small("Visible in Excel Signatures. Tested in one Excel environment with Book1 already open. Other versions and workbooks require QA.");
+                    } else {
                     ui.colored_label(egui::Color32::YELLOW,
                         "Excel compatibility: automatic recalculation made the V37 XML signature invalid in Office. Manual mode was accepted in V38.");
                     ui.checkbox(&mut self.excel_manual_calc_consent,
@@ -622,11 +629,16 @@ impl OfficeSignUi {
                     ui.small("Formula results in the signed copy may become stale. Recalculate the UNSIGNED source first, then sign. This choice does not change the source or every Excel workbook.");
                     ui.small("Important: Excel uses one calculation mode across all open workbooks. To verify: launch Excel with no other workbooks, select Formulas > Calculation Options > Manual, then open the signed XLSX. Opening an automatic workbook first can invalidate the signature.");
                     }
+                    }
                     ui.label("The Windows certificate provider will request your PIN if necessary. Never enter your PIN into Craft.");
                     ui.horizontal(|ui| {
                         if ui.button("Back").clicked() { self.phase = Phase::Choose }
                         let ready=self.selected.is_some() && (self.signature_mode==XlsxSignatureMode::DetachedAutomatic ||
-                            (self.excel_manual_calc_consent && (!self.embed_visible_at_default_location || self.excel_region.is_some())));
+                            (self.signature_mode==XlsxSignatureMode::NativeOfficeAutomatic &&
+                              (!self.embed_visible_at_default_location || self.excel_region.is_some())) ||
+                            (self.signature_mode==XlsxSignatureMode::NativeOfficeManual &&
+                              self.excel_manual_calc_consent &&
+                              (!self.embed_visible_at_default_location || self.excel_region.is_some())));
                         if ui.add_enabled(ready, egui::Button::new(
                             if self.signature_mode==XlsxSignatureMode::DetachedAutomatic {"Choose new XLSX + .p7s location..."}
                             else {"Choose new native-signed XLSX location..."})).clicked() {
@@ -659,6 +671,32 @@ impl OfficeSignUi {
         }
         if self.signature_mode==XlsxSignatureMode::DetachedAutomatic {
             return sign_detached_automatic(original,output,&cert.thumbprint,cancel);
+        }
+        if self.signature_mode==XlsxSignatureMode::NativeOfficeAutomatic {
+            let bytes=std::fs::read(original).map_err(|e|e.to_string())?;
+            gridcraft_xlsx::office_auto::native_auto_preflight(&bytes)
+                .map_err(|e|format!("V43B native Automatic preflight: {e}"))?;
+            if cancel.load(Ordering::SeqCst){return Err("Signature cancelled before provider invocation".into());}
+            let result=if self.embed_visible_at_default_location {
+                let region=self.excel_region.ok_or("Draw signature rectangle first.")?;
+                sign_with_visible_appearance_with_policy_cancelable(
+                    original,output,&cert.thumbprint,&self.appearance,
+                    OfficeImagePlacement::ExcelRectangle{
+                        column:region.column,row:region.row,
+                        col_offset:region.col_offset,row_offset:region.row_offset,
+                        width:region.width,height:region.height,
+                    },self.allow_additional_signatures,cancel
+                )
+            } else {
+                sign_opc_inprocess_with_policy_cancelable(
+                    original,output,&cert.thumbprint,self.allow_additional_signatures,cancel)
+            };
+            result?;
+            let count=verify_opc_inprocess(output)?;
+            if count==0{return Err("No native OPC digital signature after signing".into());}
+            self.cancel();
+            return Ok(format!("Native Office XML-DSig: {}. V43B-compatible Automatic metadata preserved. Windows OPC PASS; Microsoft Excel and QES status not assessed for THIS output.",
+                output.display()));
         }
         if !self.excel_manual_calc_consent {
             return Err("Native Office signing requires explicit manual calculation consent.".into());
@@ -819,6 +857,41 @@ mod tests {
         assert!(OfficeSignUi::check_destination(&original,&output).is_err());
         assert_eq!(std::fs::read(&original).unwrap(),b"test");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Explicitly invoked only by isolated synthetic-cert QA orchestration.
+    /// Never uses production token, credential or confidential document.
+    #[test]
+    #[ignore = "requires CRAFT_V44_QA_SOURCE, CRAFT_V44_QA_DEST, CRAFT_V44_QA_THUMBPRINT"]
+    fn v44_real_native_automatic_visible_signature_qa() {
+        let source=PathBuf::from(std::env::var_os("CRAFT_V44_QA_SOURCE").expect("QA source"));
+        let dest=PathBuf::from(std::env::var_os("CRAFT_V44_QA_DEST").expect("QA destination"));
+        let thumb=std::env::var("CRAFT_V44_QA_THUMBPRINT").expect("QA certificate thumbprint");
+        assert!(!dest.exists(), "No overwrite in synthetic signing QA");
+        gridcraft_xlsx::office_auto::native_auto_preflight(&std::fs::read(&source).unwrap()).unwrap();
+        let mut dialog=OfficeSignUi::default();
+        dialog.source=Some(source.clone());
+        dialog.phase=Phase::Confirm;
+        dialog.signature_mode=XlsxSignatureMode::NativeOfficeAutomatic;
+        dialog.certificates.push(OfficeCertificate{
+            thumbprint:thumb,
+            subject:"CN=CRAFT-V44-EPHEMERAL-QA-UNTRUSTED".into(),
+            issuer:"CN=CRAFT-V44-EPHEMERAL-QA-UNTRUSTED".into(),
+            expires:"test-only".into(),
+            has_private_key:true,
+            valid_now:true,
+        });
+        dialog.selected=Some(0);
+        dialog.embed_visible_at_default_location=true;
+        dialog.excel_region=Some(ExcelRegion{
+            column:4,row:2,col_offset:0,row_offset:0,
+            width:180*9525,height:65*9525,
+        });
+        let result=dialog.sign_cancelable(&source,&dest,&AtomicBool::new(false));
+        assert!(result.is_ok(), "Synthetic V44 native signature failed: {result:?}");
+        let signed=std::fs::read(&dest).unwrap();
+        assert!(!signed.is_empty());
+        assert!(verify_opc_inprocess(&dest).unwrap()>0);
     }
 
     #[test]
