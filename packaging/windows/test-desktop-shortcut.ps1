@@ -85,7 +85,7 @@ function Assert-Package($Package) {
   $key = Join-Path $UninstallRoot $Package.Code
   $registered = Get-ItemProperty -Path $key -ErrorAction Stop
   Assert-That ($registered.DisplayVersion -eq $Package.Version) "Wrong installed product version: $($Package.Version)"
-  foreach ($exe in 'gridcraft.exe', 'gridcraft-cli.exe') {
+  foreach ($exe in 'gridcraft.exe', 'gridcraft-cli.exe', 'craft-opc-worker.exe', 'craft-xlsx-cms.exe') {
     Assert-That (Test-Path (Join-Path $InstallDir $exe)) "$exe missing after installation"
   }
   Assert-That (Test-Path $StartLink) 'The existing Start Menu shortcut is missing'
@@ -120,6 +120,8 @@ function Assert-Removed($Package) {
   Assert-That (-not (Test-Path (Join-Path $UninstallRoot $Package.Code))) 'MSI still registered after removal'
   Assert-That (-not (Test-Path (Join-Path $InstallDir 'gridcraft.exe'))) 'App executable remains after uninstall'
   Assert-That (-not (Test-Path (Join-Path $InstallDir 'gridcraft-cli.exe'))) 'CLI executable remains after uninstall'
+  Assert-That (-not (Test-Path (Join-Path $InstallDir 'craft-opc-worker.exe'))) 'Native Office signing worker remains after uninstall'
+  Assert-That (-not (Test-Path (Join-Path $InstallDir 'craft-xlsx-cms.exe'))) 'CMS signing helper remains after uninstall'
   Assert-That (-not (Test-Path $DesktopLink)) 'Desktop shortcut remains after uninstall'
   Assert-That (-not (Test-Path $StartLink)) 'Start Menu shortcut remains after uninstall'
   Assert-That ($null -eq (Get-OptionalRegistryValue $ChoiceKey 'DesktopShortcut')) 'Saved choice remains after uninstall'
@@ -164,7 +166,8 @@ function Uninstall-AsSystem($Package) {
 $source = Join-Path $WorkDir 'Stub.cs'
 'public static class Program { public static void Main() { } }' | Set-Content -Path $source -Encoding utf8
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-foreach ($fixture in @(@('gridcraft.exe', 'winexe'), @('gridcraft-cli.exe', 'exe'))) {
+foreach ($fixture in @(@('gridcraft.exe', 'winexe'), @('gridcraft-cli.exe', 'exe'),
+                     @('craft-opc-worker.exe', 'exe'), @('craft-xlsx-cms.exe', 'exe'))) {
   & $csc /nologo /platform:x64 "/target:$($fixture[1])" "/out:$(Join-Path $Bin $fixture[0])" $source
   if ($LASTEXITCODE -ne 0) { throw 'Could not compile installer fixture' }
 }

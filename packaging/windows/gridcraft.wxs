@@ -201,6 +201,14 @@
       <Component Id="GridcraftCli">
         <File Id="GridcraftCliExe" Source="$(var.BinDir)\gridcraft-cli.exe" KeyPath="yes" />
       </Component>
+      <!-- Both executables are required for the three GridCraft Digital ID modes.
+           The application loads these strictly from its own installation directory. -->
+      <Component Id="GridcraftOpcSigner">
+        <File Id="GridcraftOpcSignerExe" Source="$(var.BinDir)\craft-opc-worker.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="GridcraftCmsSigner">
+        <File Id="GridcraftCmsSignerExe" Source="$(var.BinDir)\craft-xlsx-cms.exe" KeyPath="yes" />
+      </Component>
 
       <!-- Persist both on and off, independently of the optional shortcut. AppSearch reads
            this before MajorUpgrade removes the previous product. -->

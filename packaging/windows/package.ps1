@@ -5,7 +5,7 @@
 .DESCRIPTION
   Produces, in $env:DIST (default: dist/release):
     gridcraft-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
-    gridcraft-<version>-windows-<arch>-portable.zip   gridcraft.exe + gridcraft-cli.exe
+    gridcraft-<version>-windows-<arch>-portable.zip   app, CLI, native OPC and CMS signing workers
 
   The binaries link the C runtime statically (+crt-static), so neither the MSI nor the portable
   zip needs the Visual C++ redistributable. Signing is delegated to sign.ps1 (skipped with a
@@ -21,9 +21,22 @@
 #>
 param(
   [ValidateSet('x64', 'x86', 'arm64')] [string] $Arch = 'x64',
-  [switch] $SkipBuild
+  [switch] $SkipBuild,
+  [string] $OpcWorkerPath = $env:GRIDCRAFT_OPC_WORKER_PATH,
+  [string] $CmsWorkerPath = $env:GRIDCRAFT_CMS_WORKER_PATH,
+  [switch] $AllowUnsignedQa
 )
 $ErrorActionPreference = 'Stop'
+# Never mistake an unsigned QA build for a distributable installer.
+$azureKeys = 'AZURE_TENANT_ID','AZURE_CLIENT_ID','AZURE_CLIENT_SECRET','AZURE_SIGNING_ENDPOINT','AZURE_SIGNING_ACCOUNT','AZURE_CERT_PROFILE'
+$hasSigning = [bool]$env:WINDOWS_CERTIFICATE -or -not @($azureKeys | Where-Object { -not [Environment]::GetEnvironmentVariable($_) }).Count
+if (-not $hasSigning -and -not $AllowUnsignedQa) {
+  throw 'Production MSI requires Authenticode signing. For a PRIVATE non-installable QA artifact, explicitly specify -AllowUnsignedQa.'
+}
+if ($AllowUnsignedQa) { Write-Warning 'PRIVATE QA ONLY: this installer may be unsigned. Do not distribute or install on production machines.' }
+if ($Arch -ne 'x64') {
+  throw 'Native OPC signing worker packaging currently supports Windows x64 only. Refusing mislabeled x86/ARM64 installers.'
+}
 # WiX .NET tools may be installed privately alongside the user's .NET SDK.
 # A remote/non-interactive process can lack DOTNET_ROOT even when the runtime exists.
 # Resolve it only for this packaging process; do not install runtimes or change Windows globally.
@@ -85,6 +98,43 @@ if (-not $SkipBuild) {
 
 $Bin = Join-Path $TargetDir "$Target\release"
 
+# Standalone clean clones build their helpers from THIS repository. Explicit
+# pinned QA paths are still accepted, but neither local sibling worktrees nor
+# pre-existing unsigned binaries are required to make a release candidate.
+if (-not $OpcWorkerPath) {
+  $OpcWorkerPath = Join-Path $Bin 'craft-opc-worker.exe'
+  $nativeManifest = Join-Path $Root 'vendor\craft-signing-core\Cargo.toml'
+  if (!(Test-Path -LiteralPath $nativeManifest -PathType Leaf)) {
+    throw 'Vendored native signing-core source is missing'
+  }
+  if (-not $SkipBuild) {
+    Invoke-Native "cargo build native OPC worker ($Target)" {
+      cargo build --release --locked --manifest-path $nativeManifest --bin craft-opc-worker --target $Target
+    }
+  }
+}
+if (-not $CmsWorkerPath) {
+  $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+  $cmsSource = Join-Path $Root 'tools\detached-cms\CraftXlsxCms.cs'
+  $cmsDir = Join-Path $TargetDir 'windows-package\support'
+  New-Item -ItemType Directory -Force -Path $cmsDir | Out-Null
+  $CmsWorkerPath = Join-Path $cmsDir 'craft-xlsx-cms.exe'
+  if (!(Test-Path -LiteralPath $csc -PathType Leaf) -or !(Test-Path -LiteralPath $cmsSource -PathType Leaf)) {
+    throw 'Bundled CMS helper source / .NET Framework compiler missing'
+  }
+  Invoke-Native 'build detached CMS worker from bundled C# source' {
+    & $csc /nologo /target:exe /optimize+ ("/out:"+$CmsWorkerPath) /r:System.Security.dll $cmsSource
+  }
+}
+foreach ($pair in @(@('craft-opc-worker.exe',$OpcWorkerPath),@('craft-xlsx-cms.exe',$CmsWorkerPath))) {
+  if (-not $pair[1] -or -not (Test-Path -LiteralPath $pair[1] -PathType Leaf)) {
+    throw "Signing helper $($pair[0]) unavailable after build; refusing incomplete MSI"
+  }
+  if ((Split-Path -Leaf $pair[1]) -ine $pair[0]) {
+    throw "Expected explicitly named signing worker $($pair[0])"
+  }
+}
+
 # Check both binaries' PE headers before packaging. Machine (COFF header) must match -Arch, so an
 # x64 build can never ship labelled arm64. Subsystem (optional header): 2 = Windows GUI, 3 = console.
 # The app must be GUI (no console window opens with it); the CLI must stay console so its output
@@ -105,8 +155,34 @@ $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 Copy-Item (Join-Path $Bin 'gridcraft.exe'), (Join-Path $Bin 'gridcraft-cli.exe') $Stage
-
-& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'gridcraft.exe') (Join-Path $Stage 'gridcraft-cli.exe')
+# Signer helpers must be next to gridcraft.exe: UI resolves them using current_exe().
+# The CMS worker is .NET Framework AnyCPU; the native OPC worker MUST be x64.
+$nativeHeader = Get-PeHeader $OpcWorkerPath
+if ($nativeHeader.Machine -ne 0x8664) {
+  throw "Native signing worker is not a Windows x64 PE executable: machine=$($nativeHeader.Machine)"
+}
+Copy-Item -LiteralPath $OpcWorkerPath -Destination (Join-Path $Stage 'craft-opc-worker.exe')
+Copy-Item -LiteralPath $CmsWorkerPath -Destination (Join-Path $Stage 'craft-xlsx-cms.exe')
+foreach ($worker in 'craft-opc-worker.exe','craft-xlsx-cms.exe') {
+  if (-not (Test-Path -LiteralPath (Join-Path $Stage $worker) -PathType Leaf)) {
+    throw "Failed to stage $worker; blocking incomplete MSI"
+  }
+}
+$stageExecutables = @(
+  (Join-Path $Stage 'gridcraft.exe'),
+  (Join-Path $Stage 'gridcraft-cli.exe'),
+  (Join-Path $Stage 'craft-opc-worker.exe'),
+  (Join-Path $Stage 'craft-xlsx-cms.exe')
+)
+# PowerShell requires splatting @variable here. Passing @(...), an expression,
+# binds one concatenated string and makes sign.ps1 resolve a nonexistent path.
+& (Join-Path $PSScriptRoot 'sign.ps1') @stageExecutables
+if (-not $AllowUnsignedQa) {
+  foreach ($worker in 'gridcraft.exe','gridcraft-cli.exe','craft-opc-worker.exe','craft-xlsx-cms.exe') {
+    $result=Get-AuthenticodeSignature -LiteralPath (Join-Path $Stage $worker)
+    if ($result.Status -ne 'Valid') { throw "Authenticode not valid for $worker : $($result.Status)" }
+  }
+}
 
 # ---- MSI ---------------------------------------------------------------------------------------
 $Msi = Join-Path $Dist "gridcraft-$Version-windows-$Arch.msi"
@@ -118,6 +194,10 @@ Invoke-Native 'wix build' {
 # wix writes its debug symbols (.wixpdb) next to the MSI; keep them out of the release assets.
 Remove-Item -Force -ErrorAction SilentlyContinue ([IO.Path]::ChangeExtension($Msi, '.wixpdb'))
 & (Join-Path $PSScriptRoot 'sign.ps1') $Msi
+if (-not $AllowUnsignedQa) {
+  $msiSignature=Get-AuthenticodeSignature -LiteralPath $Msi
+  if ($msiSignature.Status -ne 'Valid') { throw "MSI Authenticode invalid: $($msiSignature.Status)" }
+}
 
 # ---- portable zip ------------------------------------------------------------------------------
 $Portable = Join-Path $TargetDir "windows-package\gridcraft-$Version-windows-$Arch-portable"

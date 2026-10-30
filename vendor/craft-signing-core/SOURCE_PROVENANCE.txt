@@ -1,0 +1,8 @@
+Source repository: https://github.com/Yanakiev432/craft-signing-core.git
+Local audited worktree commit: 3709e62fbc5e0264d871e73a432831ec7a37bb87
+Source worktree was clean when copied: true
+Included tracked source: Cargo.toml, build.rs, README.md, src/, native/
+Excludes compiled outputs, secrets, external scripts, separate historical QA artifacts.
+License declaration from source Cargo.toml: MIT OR Apache-2.0
+This vendoring is for standalone, reproducible GridCraft source builds; native key and PIN remain in Windows provider.
+Required compile-time included script: tools/opc_signature_windows.ps1; SHA256=33235A8521935AC742C38D3CCC5C773B4178749E6B04C85885D71785F563FFDA
