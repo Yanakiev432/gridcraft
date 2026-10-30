@@ -1,0 +1,64 @@
+{
+    "schema":  "craft.gridcraft.v47.windows.private-qa",
+    "date":  "2026-10-30",
+    "source_branch":  "integration/gridcraft-v47-native-signing-msi-20261030",
+    "source_commit":  "94ca651a01c10f6f7e78b08eda34f2ed6ede5d95",
+    "integration":  "V46 native Excel signing integrated from main lineage; no merge conflicts",
+    "clean_clone":  "PASS: vendored native signing core and bundled C# CMS source built from this repository",
+    "source_provenance":  "vendor/craft-signing-core/SOURCE_PROVENANCE.txt",
+    "build":  "Windows x64 release binaries, Rust offline; native worker from vendored Rust source; CMS from bundled C#",
+    "msi":  {
+                "path":  "C:\\Users\\User\\Documents\\CRAFT_GRIDCRAFT_V47_SELF_CONTAINED_QA_20261030\\gridcraft-0.8.0-v47-selfcontained-qa-windows-x64.msi",
+                "bytes":  15507456,
+                "sha256":  "875BD48ADDCCEE41C365385229BDF134A796EB28B9B4ADD7F3F74D1A786A8CAE",
+                "offline_file_table":  "PASS four executables",
+                "authenticode":  "NotSigned",
+                "installed":  false
+            },
+    "portable":  {
+                     "path":  "C:\\Users\\User\\Documents\\CRAFT_GRIDCRAFT_V47_SELF_CONTAINED_QA_20261030\\gridcraft-0.8.0-v47-selfcontained-qa-windows-x64-portable.zip",
+                     "bytes":  19674508,
+                     "sha256":  "EE4EE9C338CB08BABFB0CA42BF8A7D5ADB89974C24AD2C9DB1776613DB2D4777",
+                     "offline_entries":  "PASS four executables"
+                 },
+    "bundled_executables":  [
+                                {
+                                    "name":  "gridcraft.exe",
+                                    "size":  35586048,
+                                    "sha256":  "B88803005D4B2E904F12311E7E8816CF27F0D30B8DBAEC6C059863C9C51EC3E9",
+                                    "authenticode":  "NotSigned"
+                                },
+                                {
+                                    "name":  "gridcraft-cli.exe",
+                                    "size":  14402560,
+                                    "sha256":  "639649532F023200A6809385D276D737520CBDBD48466B0E130867043E194D23",
+                                    "authenticode":  "NotSigned"
+                                },
+                                {
+                                    "name":  "craft-opc-worker.exe",
+                                    "size":  810496,
+                                    "sha256":  "E26F2A6BF83C84C0B866DCAC5133E6E78DDB400AB9AB89C2C747AB74E62A5583",
+                                    "authenticode":  "NotSigned"
+                                },
+                                {
+                                    "name":  "craft-xlsx-cms.exe",
+                                    "size":  9216,
+                                    "sha256":  "A9B7CC44E89AA4E9BDFC2D440C09854E679552AE1762CE01F01B95615884FFBE",
+                                    "authenticode":  "NotSigned"
+                                }
+                            ],
+    "inherited_identity":  {
+                               "Manufacturer":  "Learning Machines LLC",
+                               "ProductName":  "GridCraft",
+                               "ProductVersion":  "0.8.0",
+                               "UpgradeCode":  "{5511327B-F305-41BE-92D0-EB84944E7C4D}",
+                               "status":  "RELEASE_BLOCKER: resolve independent publisher and upgrade isolation BEFORE installation or distribution"
+                           },
+    "covered_by_prior_external_excel":  "V44,V45: native recognized and tamper rejected; no repeated tests performed",
+    "no_production_changes":  true,
+    "no_gpu_load":  true,
+    "no_paid_api":  true,
+    "no_certificate_private_key_access":  true,
+    "public_release":  "NO_GO",
+    "reason":  "Private unsigned QA; publisher/MSI upgrade identity not finalized; real B-Trust and V46 external acceptance not proved"
+}
