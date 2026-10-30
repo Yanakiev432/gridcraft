@@ -16,16 +16,16 @@ if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows' -or $env:RUN
 }
 if (-not $WorkDir) { $WorkDir = Join-Path $env:RUNNER_TEMP 'gridcraft-shortcut-smoke' }
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$InstallDir = Join-Path $env:ProgramFiles 'GridCraft'
-$DesktopLink = Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'GridCraft.lnk'
-$StartLink = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'GridCraft.lnk'
-$ChoiceKey = 'HKLM:\Software\GridCraft\Installer'
-$ComponentKey = 'HKLM:\Software\GridCraft\Installer'
+$InstallDir = Join-Path $env:ProgramFiles 'GridCraft-CraftOS'
+$DesktopLink = Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'GridCraft (Craft Open Source).lnk'
+$StartLink = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'GridCraft (Craft Open Source).lnk'
+$ChoiceKey = 'HKLM:\Software\CraftOpenSource\GridCraft\Installer'
+$ComponentKey = 'HKLM:\Software\CraftOpenSource\GridCraft\Installer'
 $UninstallRoot = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
 $Icon = Join-Path $Root 'assets\app-icon\gridcraft.ico'
 if ((Test-Path $InstallDir) -or (Test-Path $DesktopLink) -or (Test-Path $StartLink) -or
-    (Test-Path 'HKLM:\Software\GridCraft') -or (Test-Path 'HKCU:\Software\GridCraft')) {
-  throw 'Refusing to run against an existing GridCraft installation or its settings.'
+    (Test-Path 'HKLM:\Software\CraftOpenSource\GridCraft') -or (Test-Path 'HKCU:\Software\CraftOpenSource\GridCraft')) {
+  throw 'Refusing to run against an existing Craft Open Source GridCraft installation or its settings.'
 }
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
 $Bin = Join-Path $WorkDir 'bin'
@@ -95,7 +95,7 @@ function Assert-Desktop([bool] $Enabled) {
   Assert-That ((Test-Path $DesktopLink) -eq $Enabled) "Desktop shortcut presence should be $Enabled"
   $marker = Get-OptionalRegistryValue $ComponentKey 'DesktopShortcutComponent'
   Assert-That (($null -ne $marker) -eq $Enabled) 'Shortcut component marker must match the machine-wide shortcut'
-  Assert-That ($null -eq (Get-OptionalRegistryValue 'HKCU:\Software\GridCraft\Installer' 'DesktopShortcutComponent')) 'Shortcut component must not leave a per-user marker'
+  Assert-That ($null -eq (Get-OptionalRegistryValue 'HKCU:\Software\CraftOpenSource\GridCraft\Installer' 'DesktopShortcutComponent')) 'Shortcut component must not leave a per-user marker'
   $choice = Get-ItemPropertyValue -Path $ChoiceKey -Name DesktopShortcut
   Assert-That ($choice -eq $(if ($Enabled) { '1' } else { '0' })) 'Installer did not persist the selected desktop choice'
   if (-not $Enabled) { return }

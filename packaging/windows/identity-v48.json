@@ -1,0 +1,17 @@
+{
+  "schema": "craft.gridcraft.msi.identity.v48",
+  "edition": "GridCraft (Craft Open Source)",
+  "manufacturer_display_only": "Craft Open Source",
+  "legal_publisher_verified": false,
+  "msi_upgrade_code": "F4724585-B6F6-5A6B-8A6B-D1F31AC9A52F",
+  "original_msi_upgrade_code_do_not_reuse": "5511327B-F305-41BE-92D0-EB84944E7C4D",
+  "app_component_guid": "81DB937B-E80A-5A2E-8BBC-8C1584DAFD36",
+  "original_app_component_guid_do_not_reuse": "0507D4B6-12FF-4882-84E1-59083E74A4EB",
+  "install_folder": "GridCraft-CraftOS",
+  "display_name": "GridCraft (Craft Open Source)",
+  "app_paths_alias": "gridcraft-craftos.exe",
+  "registry_prefix": "Software\\CraftOpenSource\\GridCraft",
+  "progid_prefix": "CraftOpenSource.GridCraft",
+  "origin": "deterministic uuid5(NAMESPACE_URL, github project identity/v1) for private isolated build",
+  "policy": "Never impersonate or replace the upstream MSI. No production installation; code signing identity pending."
+}

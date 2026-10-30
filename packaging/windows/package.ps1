@@ -191,6 +191,15 @@ Invoke-Native 'wix build' {
     -d "Version=$MsiVersion" -d "BinDir=$Stage" -d "IconPath=$(Join-Path $Root 'assets\app-icon\gridcraft.ico')" `
     -o $Msi
 }
+# This independent build must never upgrade/remove original GridCraft.
+# Gate every generated MSI against the unique Craft Open Source identity.
+$IdentitySpec = Join-Path $PSScriptRoot 'identity-v48.json'
+$IdentityChecker = Join-Path $PSScriptRoot 'verify-isolated-msi-identity.ps1'
+if (!(Test-Path -LiteralPath $IdentitySpec -PathType Leaf) -or !(Test-Path -LiteralPath $IdentityChecker -PathType Leaf)) {
+  throw 'Independent MSI identity guard is missing; do not distribute this package.'
+}
+& $IdentityChecker -Msi $Msi -IdentityJson $IdentitySpec | Out-Null
+
 # wix writes its debug symbols (.wixpdb) next to the MSI; keep them out of the release assets.
 Remove-Item -Force -ErrorAction SilentlyContinue ([IO.Path]::ChangeExtension($Msi, '.wixpdb'))
 & (Join-Path $PSScriptRoot 'sign.ps1') $Msi
