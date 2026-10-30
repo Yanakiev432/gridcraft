@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Isolated CI sentinel ONLY. Deliberately matches the historical GridCraft
+     UpgradeCode and directory to detect accidental takeover by the fork.
+     Never publish or use outside a disposable GitHub-hosted Windows runner. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="GridCraft" Manufacturer="Learning Machines LLC"
+           Version="90.0.0" UpgradeCode="5511327B-F305-41BE-92D0-EB84944E7C4D"
+           Scope="perMachine" Compressed="yes" Language="1033">
+    <MediaTemplate EmbedCab="yes" />
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="LEGACYFOLDER" Name="GridCraft" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <Feature Id="Main" Title="Historical GridCraft sentinel" Level="1">
+      <ComponentGroupRef Id="LegacyComponents" />
+    </Feature>
+  </Package>
+  <Fragment>
+    <ComponentGroup Id="LegacyComponents" Directory="LEGACYFOLDER">
+      <Component Id="LegacyApp" Guid="0507D4B6-12FF-4882-84E1-59083E74A4EB">
+        <File Id="LegacyGridcraftExe" Source="$(var.LegacyExe)" KeyPath="yes">
+          <Shortcut Id="LegacyStartMenuShortcut" Directory="ProgramMenuFolder"
+                    Name="GridCraft" WorkingDirectory="LEGACYFOLDER" Advertise="yes" />
+        </File>
+        <RegistryValue Root="HKLM" Key="Software\GridCraft\Installer"
+                       Name="ProtectedLegacyFixture" Value="V49-DO-NOT-TOUCH"
+                       Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\gridcraft.exe"
+                       Value="[#LegacyGridcraftExe]" Type="string" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

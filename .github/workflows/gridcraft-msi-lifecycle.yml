@@ -1,0 +1,53 @@
+# New acceptance gate for independent GridCraft MSI identity.
+# Explicit hosted-runner guard in every install script. Never runs on Lenovo.
+name: GridCraft independent MSI lifecycle
+
+on:
+  pull_request:
+    paths:
+      - "packaging/windows/**"
+      - ".github/workflows/gridcraft-msi-lifecycle.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gridcraft-msi-lifecycle-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  independent-msi:
+    name: Disposable Windows x64 MSI lifecycle
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - name: Checkout this independent repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Provision pinned WiX 5.0.2
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - name: Check native Win32 MSI scripts parse
+        shell: pwsh
+        run: |
+          foreach ($p in @(
+            'packaging/windows/test-desktop-shortcut.ps1',
+            'packaging/windows/test-msi-side-by-side.ps1',
+            'packaging/windows/verify-isolated-msi-identity.ps1',
+            'packaging/windows/verify-signing-payload.ps1',
+            'packaging/windows/package.ps1'
+          )) {
+            $tokens=$null; $errors=$null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $p).Path,[ref]$tokens,[ref]$errors) | Out-Null
+            if (@($errors).Count) { throw "Parse errors in $p : $($errors -join '; ')" }
+          }
+      - name: Install, repair, upgrade and remove independent MSI
+        shell: pwsh
+        run: ./packaging/windows/test-desktop-shortcut.ps1
+      - name: Verify real side-by-side isolation from historical MSI sentinel
+        shell: pwsh
+        run: ./packaging/windows/test-msi-side-by-side.ps1
