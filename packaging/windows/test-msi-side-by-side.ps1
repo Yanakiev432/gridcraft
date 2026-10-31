@@ -112,8 +112,8 @@ try {
  'V49_ORIGINAL_GRIDCRAFT_PRESERVED=PASS'
 }catch{$errorRecord=$_}
 finally{
- if($newInstalled -and (IsInstalled $newCode)){try{Invoke-Msi 'cleanup-fork' @('/x',$newCode)}catch{if(!$errorRecord){$errorRecord=$_}}}
- if($oldInstalled -and (IsInstalled $oldCode)){try{Invoke-Msi 'cleanup-legacy' @('/x',$oldCode)}catch{if(!$errorRecord){$errorRecord=$_}}}
+ if(IsInstalled $newCode){try{Invoke-Msi 'cleanup-fork' @('/x',$newCode)}catch{if(!$errorRecord){$errorRecord=$_}}}
+ if(IsInstalled $oldCode){try{Invoke-Msi 'cleanup-legacy' @('/x',$oldCode)}catch{if(!$errorRecord){$errorRecord=$_}}}
 }
 if($errorRecord){throw $errorRecord}
 Require (-not (IsInstalled $newCode)) 'Fork cleanup incomplete'
