@@ -22,7 +22,7 @@ $uninst='HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
 foreach($p in @($oldDir,$newDir,$oldLink,$newLink,$oldKey,'HKLM:\Software\CraftOpenSource\GridCraft')){
  if(Test-Path $p){throw "HARD STOP: existing product/setting at $p"}
 }
-$existing=@(Get-ItemProperty "$uninst\*",'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object {$_.DisplayName -match '^GridCraft($|\s|\()'})
+$existing=@(Get-ItemProperty "$uninst\*",'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object {$_.PSObject.Properties['DisplayName'] -and $_.PSObject.Properties['DisplayName'].Value -match '^GridCraft($|\s|\()'})
 if($existing.Count){throw 'HARD STOP: real GridCraft already installed on this runner'}
 New-Item -ItemType Directory -Force -Path $bin|Out-Null
 $source=Join-Path $WorkDir 'Stub.cs'

@@ -69,9 +69,9 @@ try {
     throw 'Independent start-menu/desktop shortcut absent'
   }
   $components=@(Fetch-All 'Component')
-  $oldComponent=@($components|Where-Object {$_.Count -ge 2 -and $_.Cells[1].Trim('{}') -eq $spec.original_app_component_guid_do_not_reuse})
+  $oldComponent=@($components|Where-Object {$_.Cells.Count -ge 2 -and $_.Cells[1].Trim('{}') -eq $spec.original_app_component_guid_do_not_reuse})
   if($oldComponent.Count){throw 'Legacy fixed component GUID was reused'}
-  $installed=@(Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue|Where-Object {$_.DisplayName -eq 'GridCraft'})
+  $installed=@(Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue|Where-Object {$_.PSObject.Properties['DisplayName'] -and $_.PSObject.Properties['DisplayName'].Value -eq 'GridCraft'})
   if($installed.Count -gt 0 -and @($installed|Where-Object {$_.PSChildName -ieq $props['ProductCode']}).Count -gt 0) {
     throw 'CRITICAL: MSI ProductCode collides with installed original GridCraft'
   }
