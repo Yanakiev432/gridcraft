@@ -1,5 +1,4 @@
-# New acceptance gate for independent GridCraft MSI identity.
-# Explicit hosted-runner guard in every install script. Never runs on Lenovo.
+# Independent MSI lifecycle gate; installation is allowed only on disposable GitHub-hosted runners.
 name: GridCraft independent MSI lifecycle
 
 on:
@@ -47,7 +46,17 @@ jobs:
           }
       - name: Install, repair, upgrade and remove independent MSI
         shell: pwsh
-        run: ./packaging/windows/test-desktop-shortcut.ps1
+        run: ./packaging/windows/test-desktop-shortcut.ps1 -WorkDir "$env:RUNNER_TEMP\gridcraft-shortcut-smoke"
       - name: Verify real side-by-side isolation from historical MSI sentinel
         shell: pwsh
-        run: ./packaging/windows/test-msi-side-by-side.ps1
+        run: ./packaging/windows/test-msi-side-by-side.ps1 -WorkDir "$env:RUNNER_TEMP\gridcraft-v49-isolation"
+      - name: Retain MSI logs on failure for root-cause analysis
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gridcraft-msi-lifecycle-failure-logs
+          path: |
+            ${{ runner.temp }}/gridcraft-shortcut-smoke/*.log
+            ${{ runner.temp }}/gridcraft-v49-isolation/*.log
+          if-no-files-found: warn
+          retention-days: 7
