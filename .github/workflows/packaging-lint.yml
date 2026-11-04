@@ -45,7 +45,8 @@ jobs:
                            'packaging/windows/test-msi-side-by-side.ps1',
                            'packaging/windows/verify-isolated-msi-identity.ps1',
                            'packaging/windows/sandbox/Build-SandboxFixtures.ps1',
-                           'packaging/windows/sandbox/Run-SandboxAcceptance.ps1')) {
+                           'packaging/windows/sandbox/Run-SandboxAcceptance.ps1',
+                           'packaging/windows/sandbox/Launch-GridCraft-Sandbox-QA.ps1')) {
             $tokens=$null; $errors=$null
             [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $p).Path,[ref]$tokens,[ref]$errors) | Out-Null
             if (@($errors).Count) { throw "Parse errors in $p : $($errors -join '; ')" }

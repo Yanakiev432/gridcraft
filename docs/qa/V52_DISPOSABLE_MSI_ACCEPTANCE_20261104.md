@@ -48,3 +48,8 @@ V46 external Microsoft Excel formula/signature acceptance and V51 real B-Trust p
 ## File type registrations
 
 The engine source implements `.xlsb` and `.ods` as **import-only** formats; these are offered via `Open with`, not as default handlers. They must not be advertised as writable formats in public release notes.
+## Portable acceptance bundle for another Windows 11 Pro/Enterprise host
+
+A verified, self-contained **synthetic-only** QA ZIP is available locally as CRAFT_GRIDCRAFT_V52_SANDBOX_ACCEPTANCE_20261104.zip (138244 bytes; SHA-256 CFFBED5138793AFED2D2DB1A931EB780306D1B129FE1561A35A40486EBCDB853). It contains the four synthetic MSI fixtures, an isolated Sandbox launcher, and Bulgarian instructions. The launcher PrepareOnly check passed on Lenovo without installing any MSI. The ZIP itself does **not** contain a real release executable, user workbook, B-Trust certificate, or signing key.
+
+On another Windows 11 Pro/Enterprise machine with Windows Sandbox enabled, extract the ZIP and run Launch-GridCraft-Sandbox-QA.ps1 from the extracted root. Send back Results\sandbox-acceptance.json. A pass: true result is required for lifecycle acceptance; generating this bundle alone is **not** an acceptance PASS.
