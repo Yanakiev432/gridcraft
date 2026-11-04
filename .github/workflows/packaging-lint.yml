@@ -21,3 +21,46 @@ jobs:
   lint:
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
     uses: storytold/craft-common-actions/.github/workflows/packaging-lint.yml@main
+  windows-msi-acceptance:
+    name: Independent MSI acceptance on disposable Windows
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/integration/gridcraft-v48-side-by-side-msi-20261030'
+    runs-on: windows-2022
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout isolated PR branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install pinned WiX 5.0.2
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - name: Assert PowerShell test scripts parse
+        shell: pwsh
+        run: |
+          foreach ($p in @('packaging/windows/test-desktop-shortcut.ps1',
+                           'packaging/windows/test-msi-side-by-side.ps1',
+                           'packaging/windows/verify-isolated-msi-identity.ps1')) {
+            $tokens=$null; $errors=$null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $p).Path,[ref]$tokens,[ref]$errors) | Out-Null
+            if (@($errors).Count) { throw "Parse errors in $p : $($errors -join '; ')" }
+          }
+      - name: Exercise desktop shortcut, repair, upgrade, and uninstall
+        shell: pwsh
+        run: ./packaging/windows/test-desktop-shortcut.ps1 -WorkDir "$env:RUNNER_TEMP\gridcraft-shortcut-smoke"
+      - name: Exercise original-versus-independent MSI isolation
+        shell: pwsh
+        run: ./packaging/windows/test-msi-side-by-side.ps1 -WorkDir "$env:RUNNER_TEMP\gridcraft-v49-isolation"
+      - name: Upload installer logs if acceptance fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gridcraft-msi-disposable-acceptance-logs
+          path: |
+            ${{ runner.temp }}/gridcraft-shortcut-smoke/*.log
+            ${{ runner.temp }}/gridcraft-v49-isolation/*.log
+          if-no-files-found: warn
+          retention-days: 7
