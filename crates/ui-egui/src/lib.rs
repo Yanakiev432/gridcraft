@@ -48,6 +48,8 @@ pub mod paper_view;
 pub mod pivot_pane;
 pub mod printing;
 pub mod ribbon;
+#[cfg(target_os = "windows")]
+pub mod office_sign_ui;
 pub mod selection_glide;
 pub mod tabs;
 pub mod text_box;
@@ -216,6 +218,8 @@ pub struct Perf {
 }
 
 pub struct SheetApp {
+    #[cfg(target_os = "windows")]
+    pub office_sign: office_sign_ui::OfficeSignUi,
     pub session: Session,
     pub ui: UiState,
     /// The window chrome to draw (see [`Chrome`]).
