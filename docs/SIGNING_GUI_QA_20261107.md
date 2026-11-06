@@ -35,3 +35,10 @@ Status: **SOURCE BUILD CHECK PASS; PRODUCTION INSTALL / B-TRUST ACCEPTANCE NOT Y
 Do **not** merge to the main branch or replace the installed release based only on successful `cargo check`. Keep the original source documents and existing signed documents unmodified.
 
 Windows QA logs and receipts: `C:\Users\User\Documents\CraftUpdates\Signing-Rebase-20261106\GUI-QA-20261107`.
+
+## Additional owner-session runtime checks (2026-11-07)
+
+- Rechecked 5 installed QA CLI scenarios on Windows: native OPC integrity returned success for signed DOCX, DOCX with two independent signatures, and signed XLSX; it returned nonzero for deliberately tampered signed DOCX and XLSX. **5/5 PASS.** Receipt: `EXISTING_CLI_INTEGRITY_REGRESSION.json`.
+- Parsed already-signed synthetic Word DOCX via `wordcraft-cli info` and GridCraft XLSX via `gridcraft-cli info`: **2/2 exit code 0**. The minimal synthetic XLSX produced a nonfatal warning about its absent optional styles part. Receipt: `SIGNED_DOCUMENT_OPEN_QA.json`.
+- Sanitized CurrentUser certificate EKU audit confirmed two B-Trust personal certificates, neither with Code Signing EKU. Receipt: `SIGNING_CERTIFICATE_EKU_AUDIT_SANITIZED.json`.
+- All receipts are on Yanakiev-Lenovo at the QA directory described above; no real B-Trust signing or signed MSI is claimed.
