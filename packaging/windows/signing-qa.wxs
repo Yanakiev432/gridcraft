@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <!-- Separate QA-only installer. Never use upstream manufacturer's name or upgrade code. -->
+  <Package Name="GridCraft Signing QA (UNTRUSTED)"
+           Manufacturer="Craft Open Source QA (independent test build)"
+           Version="0.16.1" UpgradeCode="44B61ADB-7CE6-5EE7-AE1C-85CCFC3C8564"
+           Language="1033" Scope="perMachine" Compressed="yes">
+    <SummaryInformation Description="UNTRUSTED QA ONLY - GridCraft signing integration test" Manufacturer="Craft Open Source QA (independent test build)" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <Property Id="QA_INSTALL" Secure="yes" />
+    <Launch Condition="Installed OR QA_INSTALL = &quot;YES&quot;"
+            Message="This experimental MSI is not publicly trusted and cannot be installed without explicit QA_INSTALL=YES." />
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="QASuiteFolder" Name="Craft Open Source QA">
+        <Directory Id="INSTALLFOLDER" Name="GridCraft Signing QA" />
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="Main" Title="GridCraft Signing QA - untrusted" Level="1">
+      <ComponentGroupRef Id="QAFileGroup"/>
+    </Feature>
+  </Package>
+  <Fragment>
+    <ComponentGroup Id="QAFileGroup" Directory="INSTALLFOLDER">
+      <Component Id="QAFileComp00" Guid="*">
+        <File Id="QAFile00" Source="$(var.Stage)\gridcraft.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="QAFileComp01" Guid="*">
+        <File Id="QAFile01" Source="$(var.Stage)\gridcraft-cli.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="QAFileComp02" Guid="*">
+        <File Id="QAFile02" Source="$(var.Stage)\Run-GridCraft-QA.cmd" KeyPath="yes" />
+      </Component>
+      <Component Id="QAFileComp03" Guid="*">
+        <File Id="QAFile03" Source="$(var.Stage)\Run-GridCraft-BTrust-QA.cmd" KeyPath="yes" />
+      </Component>
+      <Component Id="QAFileComp04" Guid="*">
+        <File Id="QAFile04" Source="$(var.Stage)\README-QA.txt" KeyPath="yes" />
+      </Component>
+      <Component Id="QAFileComp05" Guid="*">
+        <File Id="QAFile05" Source="$(var.Stage)\QA_MANIFEST.json" KeyPath="yes" />
+      </Component>
+      <Component Id="QAFileComp06" Guid="*">
+        <File Id="QAFile06" Source="$(var.Stage)\LICENSE-MIT" KeyPath="yes" />
+      </Component>
+      <Component Id="QAFileComp07" Guid="*">
+        <File Id="QAFile07" Source="$(var.Stage)\LICENSE-APACHE" KeyPath="yes" />
+      </Component>
+      <Component Id="QAFileComp08" Guid="*">
+        <File Id="QAFile08" Source="$(var.Stage)\NOTICE" KeyPath="yes" />
+      </Component>
+      <Component Id="QAFileComp09" Guid="*">
+        <File Id="QAFile09" Source="$(var.Stage)\ATTRIBUTION.md" KeyPath="yes" />
+      </Component>
+      <Component Id="QAFileComp10" Guid="*">
+        <File Id="QAFile10" Source="$(var.Stage)\QES_QA_UNSIGNED_ORIGINAL.xlsx" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>
