@@ -66,3 +66,14 @@ Most recent uploaded ZIP SHA-256: `00bed92450f60ba4f2c92a3c9feee0e382c68b6a086ef
 With the **locally generated software QA certificate only** (not B-Trust), both unsigned test fixtures packaged in the owner's Draft Pre-release were independently signed to new output names by the bundled pinned CLI, then verified and parsed by the application. The original unsigned fixture SHA-256 values remained unchanged. **WordCraft DOCX: sign/verify/parse/source immutable 4/4 PASS. GridCraft XLSX: 4/4 PASS.** Receipt: `FixtureSigningRegression-20261107/NEW_FIXTURE_SOFTWARE_SIGN_VERIFY_20261107.json` (owner's Lenovo, not public). No hardware QES or PIN prompt was involved.
 
 The entire GUI unit-test compilation is a separate, expensive test path; its outcome is not inferred from the successful native GUI build or software-signing regression.
+
+## External XAdES owner-present bridge state (2026-11-07)
+
+The separate European XAdES/ASiC-S signing source is now in the craft-signing-core QA branch:
+https://github.com/Yanakiev432/craft-signing-core/tree/qa/dss-asic-xades-20261107/experimental/dss-asic-xades
+
+The EC DSS 6.5.1 bridge generates a separate .asics container and exchanges raw SignedInfo data with a .NET 8 sidecar. Disposable PKCS#12 test certificates and a strictly restricted self-issued Windows RSACng software certificate have passed DOCX/XLSX sign/verify and negative tampering checks. The Windows local software signer has passed certificate selection and output-collision guardrails.
+
+The owner-present B-Trust hardware QA mode is compiled and has passed read-only public certificate policy/chain checks for two candidate certificates. Its opt-in Lenovo scripts require Windows user certificate selection, a second explicit confirmation, and provider-native PIN handling. **No real B-Trust private-key signing has yet been performed.** No EU-qualified validation report, trusted timestamp or eIDAS QES verdict exists.
+
+**Do not conflate** native Office OPC/XMLDSig inside DOCX/XLSX with external XAdES Baseline-B in ASiC-S. The current GridCraft QA GUI/portable ZIP/MSI contains the previous native OPC signature feature only; the DSS sidecar and B-Trust manual launchers are **NOT** bundled in that installer. The external ASiC mode is still under independent QA and requires separate GUI/installer integration after owner-present acceptance. Official installed products remain unchanged.
