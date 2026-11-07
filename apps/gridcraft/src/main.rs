@@ -317,9 +317,16 @@ fn main() -> eframe::Result<()> {
     }
     let mut app = SheetApp::new(session, services());
     app.watch_desktop_theme();
-    app.start_update_check();
+    // QA-only opt-in: do not offer an upstream self-update in the isolated signing build.
+    let signing_qa = std::env::var("CRAFT_SIGNING_QA").as_deref() == Ok("1");
+    if !signing_qa {
+        app.start_update_check();
+    }
     let control_port = control_port;
     load_prefs(&mut app);
+    if signing_qa {
+        app.ui.ribbon_tab = "Review".into();
+    }
     // Stamp the startup workbook's author from the persisted user name.
     if app.session.documents().is_empty() {
         app.session.new_workbook();
