@@ -35,3 +35,14 @@ On 2026-11-07, targeted GUI Rust tests passed **2/2 for GridCraft**. The synthet
 Do not distribute or install this QA MSI as an official release. Microsoft Windows Installer launch-condition and public-property references:
 https://learn.microsoft.com/en-us/windows/win32/msi/launchcondition-table
 https://learn.microsoft.com/en-us/windows/win32/msi/command-line-options
+
+## External XAdES owner-present bridge state (2026-11-07)
+
+The separate European XAdES/ASiC-S signing source is now in the craft-signing-core QA branch:
+https://github.com/Yanakiev432/craft-signing-core/tree/qa/dss-asic-xades-20261107/experimental/dss-asic-xades
+
+The EC DSS 6.5.1 bridge generates a separate .asics container and exchanges raw SignedInfo data with a .NET 8 sidecar. Disposable PKCS#12 test certificates and a strictly restricted self-issued Windows RSACng software certificate have passed DOCX/XLSX sign/verify and negative tampering checks. The Windows local software signer has passed certificate selection and output-collision guardrails.
+
+The owner-present B-Trust hardware QA mode is compiled and has passed read-only public certificate policy/chain checks for two candidate certificates. Its opt-in Lenovo scripts require Windows user certificate selection, a second explicit confirmation, and provider-native PIN handling. **No real B-Trust private-key signing has yet been performed.** No EU-qualified validation report, trusted timestamp or eIDAS QES verdict exists.
+
+**Do not conflate** native Office OPC/XMLDSig inside DOCX/XLSX with external XAdES Baseline-B in ASiC-S. The current GridCraft QA GUI/portable ZIP/MSI contains the previous native OPC signature feature only; the DSS sidecar and B-Trust manual launchers are **NOT** bundled in that installer. The external ASiC mode is still under independent QA and requires separate GUI/installer integration after owner-present acceptance. Official installed products remain unchanged.
