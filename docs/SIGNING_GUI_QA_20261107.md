@@ -60,3 +60,9 @@ No production release, installed MSI replacement, merge to main, or qualified-si
 The owner-only GitHub Draft Pre-release with tag `qa-signing-gui-20261107` contains the QA ZIP with `QES_QA_UNSIGNED_ORIGINAL.xlsx` and `Run-GridCraft-BTrust-QA.cmd`. The source document was converted from a harmless anonymous TXT/CSV using the app's own CLI, parsed successfully and scanned for common personal identifiers. The launcher opens it with `CRAFT_SIGNING_QA=1` and Review selected; it **does not sign** or choose a certificate automatically. Any future hardware signing requires the owner's explicit certificate choice and provider-managed PIN input.
 
 Most recent uploaded ZIP SHA-256: `00bed92450f60ba4f2c92a3c9feee0e382c68b6a086eff5a40caa8b39ad8053a`. Its Authenticode signatures are **self-signed QA only**, with no publicly trusted release identity. The draft release is not published and `main` remains untouched.
+
+## Final new-fixture software signing regression (2026-11-07)
+
+With the **locally generated software QA certificate only** (not B-Trust), both unsigned test fixtures packaged in the owner's Draft Pre-release were independently signed to new output names by the bundled pinned CLI, then verified and parsed by the application. The original unsigned fixture SHA-256 values remained unchanged. **WordCraft DOCX: sign/verify/parse/source immutable 4/4 PASS. GridCraft XLSX: 4/4 PASS.** Receipt: `FixtureSigningRegression-20261107/NEW_FIXTURE_SOFTWARE_SIGN_VERIFY_20261107.json` (owner's Lenovo, not public). No hardware QES or PIN prompt was involved.
+
+The entire GUI unit-test compilation is a separate, expensive test path; its outcome is not inferred from the successful native GUI build or software-signing regression.
