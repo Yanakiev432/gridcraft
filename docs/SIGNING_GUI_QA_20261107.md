@@ -1,6 +1,6 @@
 # gridcraft Windows GUI Office signature integration — QA checkpoint (2026-11-07)
 
-Status: **SOURCE BUILD CHECK PASS; PRODUCTION INSTALL / B-TRUST ACCEPTANCE NOT YET VERIFIED**.
+Status: **DESKTOP EXECUTABLE BUILD, STARTUP AND REVIEW-RIBBON VISUAL QA PASS; B-TRUST SIGNING AND TRUSTED PRODUCTION MSI NOT YET VERIFIED**.
 
 ## Revision under test
 
@@ -25,8 +25,9 @@ Status: **SOURCE BUILD CHECK PASS; PRODUCTION INSTALL / B-TRUST ACCEPTANCE NOT Y
 
 - [x] Source changes committed on a QA-only GitHub branch
 - [x] Rust GUI crate builds checked on Windows
-- [ ] Full standalone desktop executable build and startup checked
-- [ ] Review tab interaction, certificate chooser and error paths tested through real UI
+- [x] Full standalone Windows GUI executable compiled and started in the owner's desktop session
+- [x] Real Review-ribbon screenshot confirms the Sign and Verify buttons are present and laid out correctly
+- [ ] Certificate chooser, on-click actions, cancellation and PIN-provider interaction accepted through real UI
 - [ ] B-Trust-qualified hardware/remote signing completed with provider PIN prompt on disposable test document
 - [ ] Independent verification in Microsoft Office / suitable validator and revocation/qualification checks
 - [ ] Trusted Authenticode-signed MSI, bundling both GUI and matching CLI
@@ -42,3 +43,14 @@ Windows QA logs and receipts: `C:\Users\User\Documents\CraftUpdates\Signing-Reba
 - Parsed already-signed synthetic Word DOCX via `wordcraft-cli info` and GridCraft XLSX via `gridcraft-cli info`: **2/2 exit code 0**. The minimal synthetic XLSX produced a nonfatal warning about its absent optional styles part. Receipt: `SIGNED_DOCUMENT_OPEN_QA.json`.
 - Sanitized CurrentUser certificate EKU audit confirmed two B-Trust personal certificates, neither with Code Signing EKU. Receipt: `SIGNING_CERTIFICATE_EKU_AUDIT_SANITIZED.json`.
 - All receipts are on Yanakiev-Lenovo at the QA directory described above; no real B-Trust signing or signed MSI is claimed.
+
+## Completed GUI QA and isolated portable package (2026-11-07)
+
+- `cargo build -p gridcraft --offline -j 4`: **PASS**, including the native Windows GUI. Build receipt: `gridcraft-qa-startup-rebuild-receipt.json`.
+- Run with `CRAFT_SIGNING_QA=1` to disable **startup** vendor self-updates and select Review as the initial tab for this QA session only; default production startup behavior is unchanged. The portable ZIP contains `Run-GridCraft-QA.cmd` to launch with this environment variable.
+- The QA executable opened successfully in the user's interactive Windows session. Visual screenshot file: `gridcraft-REVIEW-QA-20261107.png`, stored privately on the owner's Lenovo, **not uploaded publicly**.
+- Two binaries (`gridcraft.exe`, `gridcraft-cli.exe`) have **embedded locally self-signed Authenticode test signatures** created with Windows SDK SignTool. Windows Authenticode result: **UnknownError** because the test publisher is not publicly trusted. This is **not** production code signing.
+- The isolated ZIP is named `GridCraft-0.16.1-QES-GUI-QA-LOCALLY-SIGNED-UNTRUSTED-20261107.zip`, available only in the Lenovo QA folder pending final verification. License, notice, attribution and SHA-256 receipt accompany it.
+- The OPC CLI regression tests pass with disposable software test certificates; **B-Trust hardware QES, certification chain/revocation, verified timestamp, Word/Excel product parity and trusted MSI remain NO-GO.**
+
+No production release, installed MSI replacement, merge to main, or qualified-signature declaration has occurred.
