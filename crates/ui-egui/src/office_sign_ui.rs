@@ -170,17 +170,10 @@ impl OfficeSignUi {
                 // The pinned CLI calls the native Windows OPC provider inside an isolated child.
                 // Kill that process tree on cancellation or after the 180-second deadline.
                 // No PowerShell signer or environment-supplied helper path.
-                let cli_name = if target.extension().and_then(|s| s.to_str())
-                    .is_some_and(|s| s.eq_ignore_ascii_case("docx")) {
-                    "wordcraft-cli.exe"
-                } else {
-                    "gridcraft-cli.exe"
-                };
-                let cli = std::env::current_exe().map_err(|e| e.to_string())?
-                    .with_file_name(cli_name);
-                if !cli.is_file() {
-                    return Err(format!("Signing companion {} missing next to application. Installer must bundle it.", cli_name));
-                }
+                // Stable first-party extension slot: the versioned signer
+                // worker lives outside the host installation. No arbitrary
+                // executable paths from JSON or the search PATH are executed.
+                let cli = crate::signer_extension::resolve_worker()?;
                 let mut child = Command::new(cli)
                     .arg("opc-sign").arg(&source).arg(&target)
                     .arg("--thumbprint").arg(&thumbprint)

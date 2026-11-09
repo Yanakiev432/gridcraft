@@ -2198,6 +2198,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "skrifa",
  "sys-locale",
  "toml",
