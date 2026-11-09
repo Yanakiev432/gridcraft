@@ -52,6 +52,8 @@ pub mod printing;
 pub mod ribbon;
 #[cfg(target_os = "windows")]
 pub mod office_sign_ui;
+#[cfg(target_os = "windows")]
+pub mod signer_extension;
 pub mod selection_glide;
 pub mod tabs;
 pub mod text_box;
