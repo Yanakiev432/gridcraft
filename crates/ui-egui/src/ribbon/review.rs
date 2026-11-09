@@ -65,6 +65,29 @@ pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
         );
     });
     sep(ui);
+    #[cfg(target_os = "windows")]
+    {
+        let button = big_button(ui, Icon::Lock, "Sign\nXLSX", "Sign saved XLSX via Windows Digital ID", false);
+        if button.clicked() {
+            let current = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
+            let result = match current {
+                Some((Some(path), false)) => app.office_sign.begin(std::path::Path::new(&path)),
+                Some((Some(_), true)) => Err("Save workbook changes before signing.".to_owned()),
+                _ => Err("Save as XLSX before signing.".to_owned()),
+            };
+            if let Err(error) = result { app.message = Some(("Digital signature".into(), error)); }
+        }
+        let button = big_button(ui, Icon::Validation, "Verify\nXLSX", "Verify OPC signature integrity", false);
+        if button.clicked() {
+            let source = app.session.active().and_then(|d| d.path.clone());
+            let result = match source {
+                Some(path) => app.office_sign.verify(std::path::Path::new(&path)),
+                None => Err("Save the XLSX before verifying signatures.".to_owned()),
+            };
+            if let Err(error) = result { app.message = Some(("Digital signature".into(), error)); }
+        }
+        sep(ui);
+    }
     let protected = app.active_sheet_protected();
     let __k = big_button(ui, Icon::Lock, if protected { "Unprotect\nSheet" } else { "Protect\nSheet" }, "Protect Sheet", false);
     control_keytip(app, ui, &__k, "dialog:protectSheet");

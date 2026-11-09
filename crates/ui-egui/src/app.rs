@@ -29,6 +29,8 @@ impl SheetApp {
     /// Constructs a `SheetApp` with default UI, grid, printing, control and screenshot state and the caller's session and services.
     pub fn new(session: Session, services: Services) -> SheetApp {
         SheetApp {
+            #[cfg(target_os = "windows")]
+            office_sign: crate::office_sign_ui::OfficeSignUi::new("xlsx"),
             session,
             ui: UiState::default(),
             chrome: Chrome::default(),
@@ -246,6 +248,12 @@ impl SheetApp {
             });
         }
         dialogs::show(self, &ctx);
+        #[cfg(target_os = "windows")]
+        {
+            let saved_path = self.session.active().and_then(|d| d.path.as_ref()).map(std::path::PathBuf::from);
+            let dirty = self.session.active().is_some_and(|d| d.is_dirty());
+            self.office_sign.show(&ctx, saved_path.as_deref(), dirty);
+        }
         macro_ui::forget_closed_editor(self);
         macro_ui::question_box(self, &ctx);
         widgets::message_box(self, &ctx);

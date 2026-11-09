@@ -30,11 +30,14 @@ macro_rules! outln {
 }
 
 mod check;
+mod opc_signature;
 
 use gridcraft_engine::Session;
 use serde_json::{Value, json};
 
 const USAGE: &str = "usage:
+  gridcraft-cli opc-sign <in.xlsx> <new-out.xlsx> --thumbprint <40-hex> Windows native OPC/XMLDSig
+  gridcraft-cli opc-verify <signed.xlsx>       Verify Office signature integrity
   gridcraft-cli info <file> [--json]                      sheets, used ranges, tables, charts, names
   gridcraft-cli convert <in> <out> [--sheet NAME]         xlsx/csv/tsv/json/html/pdf by extension
   gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]
@@ -73,6 +76,9 @@ fn main() -> ExitCode {
             outln!("{USAGE}");
             Ok(())
         }
+        Some("opc-sign" | "opc-verify") => opc_signature::execute(
+            args.first().map(String::as_str).unwrap_or(""), rest, "xlsx"
+        ).map(|report| outln!("{report}")),
         Some("info") => info(rest),
         Some("convert") => convert(rest),
         Some("eval") => eval(rest),

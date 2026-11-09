@@ -950,6 +950,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-signing-core"
+version = "0.1.0"
+source = "git+https://github.com/Yanakiev432/craft-signing-core.git?rev=7c8dd0f0cee6068094520a43fca309fb8ff48bc1#7c8dd0f0cee6068094520a43fca309fb8ff48bc1"
+dependencies = [
+ "cc",
+ "rustls-cng",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "zip 3.0.0",
+]
+
+[[package]]
 name = "craft-ui"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7#c5a1cbfb5f9049f9270955caffb5bee5997aebf7"
@@ -2063,6 +2076,7 @@ dependencies = [
 name = "gridcraft-cli"
 version = "0.17.0"
 dependencies = [
+ "craft-signing-core",
  "gridcraft-engine",
  "gridcraft-mcp",
  "log",
@@ -2169,6 +2183,7 @@ version = "0.17.0"
 name = "gridcraft-ui-egui"
 version = "0.17.0"
 dependencies = [
+ "craft-signing-core",
  "craft-ui",
  "craft-update",
  "craft-window",
@@ -4409,6 +4424,17 @@ dependencies = [
  "rustls-webpki",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "rustls-cng"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3eeed9c3e96253f36d1cfdd593388ecca775b532b6ff0c649a3010f6af60fe70"
+dependencies = [
+ "bitflags 2.13.2",
+ "rustls",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
