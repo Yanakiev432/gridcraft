@@ -167,9 +167,9 @@ impl OfficeSignUi {
         let (tx, rx) = mpsc::channel();
         std::thread::Builder::new().name("craft-opc-sign".into()).spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                // The pinned core CLI invokes Windows' provider in a child PowerShell process.
-                // Run the CLI out of process; kill its entire descendant tree when cancelled or
-                // after the hard 180 second deadline. No shell, no environment-supplied helper path.
+                // The pinned CLI calls the native Windows OPC provider inside an isolated child.
+                // Kill that process tree on cancellation or after the 180-second deadline.
+                // No PowerShell signer or environment-supplied helper path.
                 let cli_name = if target.extension().and_then(|s| s.to_str())
                     .is_some_and(|s| s.eq_ignore_ascii_case("docx")) {
                     "wordcraft-cli.exe"
@@ -196,8 +196,7 @@ impl OfficeSignUi {
                     let cancelled = cancel.load(Ordering::SeqCst);
                     let timed_out = started.elapsed() >= Duration::from_secs(180);
                     if cancelled || timed_out {
-                        // Windows TASKKILL /T is needed: the pinned CLI starts PowerShell as
-                        // its child; child.kill() alone would leave that signer running.
+                        // Windows TASKKILL /T also stops any provider helpers launched by the CLI.
                         let status = Command::new(r"C:\Windows\System32\taskkill.exe")
                             .arg("/F").arg("/T").arg("/PID").arg(child.id().to_string())
                             .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
@@ -308,7 +307,7 @@ impl OfficeSignUi {
                         ui.separator();
                         ui.label("New signed-copy destination (must not already exist):");
                         ui.text_edit_singleline(&mut self.output);
-                        ui.checkbox(&mut self.allow_additional, "Permit additional signatures (recommended for co-signing)");
+                        ui.small("Native OPC permits additional independent signatures. Restricting later signatures is not available in this backend.");
                         ui.small("The token/provider opens its OWN PIN prompt. Do not enter a PIN into Craft.");
                         ui.small("A successful integrity check does not by itself certify the signer as qualified under eIDAS.");
                         if !self.notice.is_empty() { ui.colored_label(egui::Color32::YELLOW, &self.notice); }
