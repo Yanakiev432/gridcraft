@@ -5,7 +5,7 @@
 #[cfg(target_os = "windows")]
 pub(crate) fn execute(cmd: &str, args: &[String], extension: &str) -> Result<String, String> {
     use craft_signing_core::format_contract::{DocumentFamily, FormatBinding, SignatureStandard};
-    use craft_signing_core::opc_windows::{sign_office_document_with_policy, verify_office_document};
+    use craft_signing_core::opc_native::{sign_opc_inprocess, verify_opc_inprocess};
     use std::io::Read;
     use std::path::Path;
 
@@ -31,7 +31,7 @@ pub(crate) fn execute(cmd: &str, args: &[String], extension: &str) -> Result<Str
             if args.len() != 1 {
                 return Err("opc-verify syntax: opc-verify <document>".into());
             }
-            verify_office_document(input)
+            verify_opc_inprocess(input).map(|count| format!("Native OPC integrity PASS: {count} signature(s); eIDAS qualification not assessed"))
         }
         "opc-sign" => {
             let [_, output, flag, thumbprint, remaining @ ..] = args else {
@@ -50,7 +50,12 @@ pub(crate) fn execute(cmd: &str, args: &[String], extension: &str) -> Result<Str
             if output_path.extension().and_then(|x| x.to_str()) != Some(extension) {
                 return Err(format!("opc-sign: output must be .{extension}"));
             }
-            sign_office_document_with_policy(input, output_path, thumbprint, allow_additional)
+            if !allow_additional {
+                return Err("Restricting additional signatures is not implemented in the native OPC backend; no signing attempted".into());
+            }
+            sign_opc_inprocess(input, output_path, thumbprint).map(|()| {
+                format!("Native OPC signing completed; new signed document: {}", output_path.display())
+            })
         }
         _ => Err("unsupported Office OPC command".into()),
     }
