@@ -71,12 +71,15 @@ pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
         // Match GridCraft's 23px ribbon controls: two quiet icon-and-text rows instead
         // of unrelated oversized 72px tiles. The sign/verify actions remain unchanged.
         let current = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
+        // Never verify the on-disk XLSX while a different unsaved
+        // workbook state is visible to the current user.
         let can_verify = current.as_ref().and_then(|(path, _)| path.as_deref())
             .is_some_and(|p| {
                 std::path::Path::new(p).extension().and_then(|ext| ext.to_str())
                     .is_some_and(|ext| ext.eq_ignore_ascii_case("xlsx"))
-            }) && !app.office_sign.busy();
-        let can_sign = can_verify && current.as_ref().is_some_and(|(_, dirty)| !dirty);
+            }) && current.as_ref().is_some_and(|(_, dirty)| !dirty)
+                && !app.office_sign.busy();
+        let can_sign = can_verify;
         let accent = Tokens::get(ui.ctx()).accent;
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 1.0;
@@ -104,7 +107,7 @@ pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
             }).inner;
             if can_verify && verify.clicked() {
                 let result = match current.as_ref() {
-                    Some((Some(path), _)) => app.office_sign.verify(std::path::Path::new(path)),
+                    Some((Some(path), dirty)) => app.office_sign.verify(std::path::Path::new(path), *dirty),
                     _ => Err("Save the XLSX before verifying signatures.".to_owned()),
                 };
                 if let Err(error) = result {
