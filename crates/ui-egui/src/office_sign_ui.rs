@@ -106,8 +106,9 @@ impl OfficeSignUi {
         self.phase = Phase::Listing;
         Ok(())
     }
-    pub fn verify(&mut self, src: &Path) -> Result<(), String> {
+    pub fn verify(&mut self, src: &Path, dirty: bool) -> Result<(), String> {
         if self.busy() { return Err("Complete the current signature operation first.".into()); }
+        if dirty { return Err("Save document changes before verifying. Unsaved edits have not been cryptographically checked.".into()); }
         self.ensure_source(src)?;
         let src = src.canonicalize().map_err(|e| e.to_string())?;
         let (tx, rx) = mpsc::channel();
@@ -358,6 +359,14 @@ mod tests {
         let unused = parent.join(format!("craft-doc-signed-not-created-{}.docx", std::process::id()));
         assert!(dialog.validate_destination(&unused).is_ok());
         std::fs::remove_file(source).unwrap();
+    }
+    #[test]
+    fn dirty_document_cannot_be_verified_as_saved() {
+        let mut dialog = OfficeSignUi::new("xlsx");
+        let result = dialog.verify(Path::new("synthetic-unsaved.xlsx"), true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Unsaved edits"));
+        assert!(!dialog.busy());
     }
     #[test]
     fn no_invalid_source_can_open_signing_dialog() {
