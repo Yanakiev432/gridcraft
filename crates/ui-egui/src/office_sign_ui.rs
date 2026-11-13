@@ -131,6 +131,44 @@ impl OfficeSignUi {
         self.phase = Phase::Verifying;
         Ok(())
     }
+    /// Read-only v2 verification uses only an owner-approved, CMS-authenticated
+    /// Craft Signer module. Legacy native Verify and Sign remain independent.
+    pub fn verify_v2(&mut self, src: &Path, dirty: bool) -> Result<(), String> {
+        if self.busy() { return Err("Complete the current signing or verification first.".into()); }
+        if dirty { return Err("Save document changes first. The signed-module verifier only checks saved bytes.".into()); }
+        self.ensure_source(src)?;
+        let kind = match self.extension {
+            "docx" => craft_signing_core::broker_protocol::OfficeKind::Docx,
+            "xlsx" => craft_signing_core::broker_protocol::OfficeKind::Xlsx,
+            _ => return Err("Unsupported Office signature document type".into()),
+        };
+        let saved = src.canonicalize().map_err(|e| format!("Cannot access saved document: {e}"))?;
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("craft-signed-broker-verify".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(|| {
+                    match craft_signing_core::office_host::verify_office_via_installed_signer(
+                        &saved, kind, false
+                    )? {
+                        craft_signing_core::broker_protocol::OfficeIntegrity::IntegrityPass => Ok(
+                            format!("Signed module v2: OPC integrity PASS for {}. Certificate trust and eIDAS QES were NOT assessed.", saved.display())
+                        ),
+                        craft_signing_core::broker_protocol::OfficeIntegrity::IntegrityRejected => Err(
+                            "Signed module v2 rejected the Office signature integrity check.".into()
+                        ),
+                    }
+                }).unwrap_or_else(|_| Err("Authenticated Office verification worker failed".into()));
+                let _ = tx.send(result);
+            })
+            .map_err(|e| format!("Cannot start signed-module verification: {e}"))?;
+        self.worker = Some(rx);
+        self.started = Some(Instant::now());
+        self.notice.clear();
+        self.success = false;
+        self.phase = Phase::Verifying;
+        Ok(())
+    }
     pub fn validate_destination(&self, destination: &Path) -> Result<(), String> {
         let source = self.source.as_deref().ok_or("No saved document selected")?;
         if !destination.is_absolute() { return Err("Enter an absolute destination path.".into()); }
@@ -373,5 +411,18 @@ mod tests {
         let mut dialog = OfficeSignUi::new("xlsx");
         assert!(dialog.begin(Path::new("not-a-saved-document.xlsx")).is_err());
         assert!(!dialog.busy());
+    }
+    #[test]
+    fn v2_never_verifies_dirty_or_unsaved_document() {
+        for extension in ["docx", "xlsx"] {
+            let mut dialog = OfficeSignUi::new(extension);
+            let source = PathBuf::from(format!("not-saved.{extension}"));
+            let refusal = dialog.verify_v2(&source, true);
+            assert!(refusal.is_err());
+            assert!(refusal.err().is_some_and(|msg| msg.contains("Save")));
+            assert!(!dialog.busy());
+            assert!(dialog.verify_v2(&source, false).is_err());
+            assert!(!dialog.busy());
+        }
     }
 }

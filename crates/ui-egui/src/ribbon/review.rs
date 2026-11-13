@@ -114,6 +114,21 @@ pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
                     app.message = Some(("Digital signature".into(), error));
                 }
             }
+            let verify_v2 = ui.add_enabled_ui(can_verify, |ui| {
+                small_button(
+                    ui, Icon::Validation, "Verify v2",
+                    "Check saved XLSX via owner-approved signed Craft Signer v2 (OPC integrity only)", false,
+                )
+            }).inner;
+            if can_verify && verify_v2.clicked() {
+                let result = match current.as_ref() {
+                    Some((Some(path), dirty)) => app.office_sign.verify_v2(std::path::Path::new(path), *dirty),
+                    _ => Err("Save the XLSX before signed-module verification.".to_owned()),
+                };
+                if let Err(error) = result {
+                    app.message = Some(("Digital signature".into(), error));
+                }
+            }
         });
         sep(ui);
     }
