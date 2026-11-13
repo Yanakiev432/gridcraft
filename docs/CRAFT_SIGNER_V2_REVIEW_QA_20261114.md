@@ -38,3 +38,14 @@ Visual Review and installed-module positive acceptance remain separate release g
 
 No GPU load, hardware signing, paid API, official Craft app install,
 global system trust changes or local publisher approval are performed.
+## Saved document view-binding acceptance
+
+A completed positive Verify/Verify v2 result is now tied to the exact
+saved document path at dispatch. When the visible editor changes to a
+different source, the file is closed, or unsaved changes appear, the
+old result becomes invalid rather than applying to the new editor view.
+
+The native Windows UI test
+completed_verification_does_not_apply_to_another_active_document
+PASSED (1/1, exit 0). This is distinct from the signed-module trust gate
+and does not claim certificate trust or eIDAS qualified status.

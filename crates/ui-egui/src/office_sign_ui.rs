@@ -26,6 +26,8 @@ pub struct OfficeSignUi {
     extension: &'static str,
     phase: Phase,
     source: Option<PathBuf>,
+    /// Saved document whose bytes were checked by the async worker.
+    verification_source: Option<PathBuf>,
     output: String,
     certificates: Vec<OfficeCertificate>,
     selected: Option<usize>,
@@ -44,6 +46,7 @@ impl OfficeSignUi {
             extension,
             phase: Phase::Idle,
             source: None,
+            verification_source: None,
             output: String::new(),
             certificates: Vec::new(),
             selected: None,
@@ -96,6 +99,7 @@ impl OfficeSignUi {
             })
             .map_err(|e| format!("Cannot start certificate enumeration: {e}"))?;
         self.source = Some(absolute);
+        self.verification_source = None;
         self.selected = None; // Never silently pick a software certificate instead of the user's QES.
         self.certificates.clear();
         self.allow_additional = true;
@@ -111,6 +115,7 @@ impl OfficeSignUi {
         if dirty { return Err("Save document changes before verifying. Unsaved edits have not been cryptographically checked.".into()); }
         self.ensure_source(src)?;
         let src = src.canonicalize().map_err(|e| e.to_string())?;
+        let tracked_source = src.clone();
         let (tx, rx) = mpsc::channel();
         std::thread::Builder::new()
             .name("craft-opc-verify".into())
@@ -124,6 +129,7 @@ impl OfficeSignUi {
                 let _ = tx.send(result);
             })
             .map_err(|e| format!("Cannot start signature verification: {e}"))?;
+        self.verification_source = Some(tracked_source);
         self.worker = Some(rx);
         self.started = Some(Instant::now());
         self.notice.clear();
@@ -143,6 +149,7 @@ impl OfficeSignUi {
             _ => return Err("Unsupported Office signature document type".into()),
         };
         let saved = src.canonicalize().map_err(|e| format!("Cannot access saved document: {e}"))?;
+        let tracked_source = saved.clone();
         let (tx, rx) = mpsc::channel();
         std::thread::Builder::new()
             .name("craft-signed-broker-verify".into())
@@ -162,6 +169,7 @@ impl OfficeSignUi {
                 let _ = tx.send(result);
             })
             .map_err(|e| format!("Cannot start signed-module verification: {e}"))?;
+        self.verification_source = Some(tracked_source);
         self.worker = Some(rx);
         self.started = Some(Instant::now());
         self.notice.clear();
@@ -298,8 +306,20 @@ impl OfficeSignUi {
             if let Some(result) = done { self.finish(result); }
         }
     }
+    /// A positive result concerns the file saved at dispatch, never a
+    /// different active document or later unsaved changes.
+    fn invalidate_if_view_changed(&mut self, current: Option<&Path>, dirty: bool) {
+        if self.phase != Phase::Finished || !self.success { return; }
+        let Some(source) = self.verification_source.as_deref() else { return; };
+        let active = current.and_then(|path| path.canonicalize().ok());
+        if dirty || active.as_deref() != Some(source) {
+            self.success = false;
+            self.notice = "The document changed or the active document was switched after verification. The previous integrity result does not apply to the current editor view. Save and verify again.".into();
+        }
+    }
     pub fn show(&mut self, ctx: &egui::Context, current: Option<&Path>, dirty: bool) {
         self.poll();
+        self.invalidate_if_view_changed(current, dirty);
         if self.phase == Phase::Idle { return; }
         if matches!(self.phase, Phase::Listing | Phase::Signing | Phase::Verifying) {
             ctx.request_repaint_after(Duration::from_millis(150));
@@ -379,6 +399,7 @@ impl OfficeSignUi {
             self.inventory = None;
             self.worker = None;
             self.source = None;
+            self.verification_source = None;
         }
     }
 }
@@ -411,6 +432,30 @@ mod tests {
         let mut dialog = OfficeSignUi::new("xlsx");
         assert!(dialog.begin(Path::new("not-a-saved-document.xlsx")).is_err());
         assert!(!dialog.busy());
+    }
+    #[test]
+    fn completed_verification_does_not_apply_to_another_active_document() {
+        for extension in ["docx", "xlsx"] {
+            let file = std::env::temp_dir().join(format!(
+                "craft-v2-view-{}.{}", std::process::id(), extension
+            ));
+            std::fs::write(&file, b"synthetic saved document only").unwrap();
+            let saved = file.canonicalize().unwrap();
+            let mut dialog = OfficeSignUi::new(extension);
+            dialog.phase = Phase::Finished;
+            dialog.success = true;
+            dialog.notice = "OPC integrity PASS".into();
+            dialog.verification_source = Some(saved.clone());
+            dialog.invalidate_if_view_changed(Some(&saved), false);
+            assert!(dialog.success, "unchanged saved view retains its verdict");
+            dialog.invalidate_if_view_changed(Some(&saved), true);
+            assert!(!dialog.success, "unsaved edits invalidate prior success");
+            assert!(dialog.notice.contains("does not apply"));
+            dialog.success = true;
+            dialog.invalidate_if_view_changed(None, false);
+            assert!(!dialog.success, "closed or switched document invalidates the verdict");
+            std::fs::remove_file(&file).unwrap();
+        }
     }
     #[test]
     fn v2_never_verifies_dirty_or_unsaved_document() {
