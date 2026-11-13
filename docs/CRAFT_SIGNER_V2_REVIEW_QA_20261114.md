@@ -32,8 +32,9 @@ The shared core passed 34/34 standard tests and 3/3 actual signed-package
 interoperability tests. GUI cargo check -p gridcraft-ui-egui --locked --offline
 passed on Windows, exit 0. The actual GridCraft UI unit test v2_never_verifies_dirty_or_unsaved_document
 PASSED (1/1, exit 0) in the native Windows lib-test binary.
-CLI compilation, visual review and installed-module QES acceptance
-remain separate release gates.
+The native GridCraft CLI compilation also PASSED:
+cargo check -p gridcraft-cli --locked --offline, exit 0.
+Visual Review and installed-module positive acceptance remain separate release gates.
 
 No GPU load, hardware signing, paid API, official Craft app install,
 global system trust changes or local publisher approval are performed.
