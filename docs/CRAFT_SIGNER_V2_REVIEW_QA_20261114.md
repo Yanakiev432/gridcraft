@@ -29,8 +29,9 @@ test rejects dirty/unsaved sources. The new button uses the existing
 small Review control rather than oversized ribbon tiles.
 
 The shared core passed 34/34 standard tests and 3/3 actual signed-package
-interoperability tests. This host still requires its own Cargo compile,
-unit tests and visual QA before any release claim.
+interoperability tests. GUI cargo check -p gridcraft-ui-egui --locked --offline
+passed on Windows, exit 0. The host unit test, CLI compile and visual
+acceptance remain separate release gates.
 
 No GPU load, hardware signing, paid API, official Craft app install,
 global system trust changes or local publisher approval are performed.
