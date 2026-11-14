@@ -28,6 +28,7 @@ pub struct OfficeSignUi {
     source: Option<PathBuf>,
     /// Saved document whose bytes were checked by the async worker.
     verification_source: Option<PathBuf>,
+    signed_v2_verification: bool,
     output: String,
     certificates: Vec<OfficeCertificate>,
     selected: Option<usize>,
@@ -47,6 +48,7 @@ impl OfficeSignUi {
             phase: Phase::Idle,
             source: None,
             verification_source: None,
+            signed_v2_verification: false,
             output: String::new(),
             certificates: Vec::new(),
             selected: None,
@@ -129,6 +131,7 @@ impl OfficeSignUi {
                 let _ = tx.send(result);
             })
             .map_err(|e| format!("Cannot start signature verification: {e}"))?;
+        self.signed_v2_verification = false;
         self.verification_source = Some(tracked_source);
         self.worker = Some(rx);
         self.started = Some(Instant::now());
@@ -169,6 +172,7 @@ impl OfficeSignUi {
                 let _ = tx.send(result);
             })
             .map_err(|e| format!("Cannot start signed-module verification: {e}"))?;
+        self.signed_v2_verification = true;
         self.verification_source = Some(tracked_source);
         self.worker = Some(rx);
         self.started = Some(Instant::now());
@@ -317,6 +321,13 @@ impl OfficeSignUi {
             self.notice = "The document changed or the active document was switched after verification. The previous integrity result does not apply to the current editor view. Save and verify again.".into();
         }
     }
+    fn verification_progress_text(&self) -> &'static str {
+        if self.signed_v2_verification {
+            "Checking saved Office signatures through the authenticated Craft Signer v2 broker (OPC integrity only; not QES)..."
+        } else {
+            "Checking native OPC signature integrity in a background worker..."
+        }
+    }
     pub fn show(&mut self, ctx: &egui::Context, current: Option<&Path>, dirty: bool) {
         self.poll();
         self.invalidate_if_view_changed(current, dirty);
@@ -384,7 +395,7 @@ impl OfficeSignUi {
                     }
                     Phase::Verifying => {
                         ui.spinner();
-                        ui.label("Checking native OPC signature integrity in a background worker...");
+                        ui.label(self.verification_progress_text());
                     }
                     Phase::Finished => {
                         if self.success { ui.strong("Integrity check completed"); }
@@ -455,6 +466,18 @@ mod tests {
             dialog.invalidate_if_view_changed(None, false);
             assert!(!dialog.success, "closed or switched document invalidates the verdict");
             std::fs::remove_file(&file).unwrap();
+        }
+    }
+    #[test]
+    fn verification_progress_identifies_native_or_signed_broker_without_qes_claim() {
+        for extension in ["docx", "xlsx"] {
+            let mut dialog = OfficeSignUi::new(extension);
+            assert!(dialog.verification_progress_text().contains("native OPC"));
+            dialog.signed_v2_verification = true;
+            let label = dialog.verification_progress_text();
+            assert!(label.contains("Craft Signer v2 broker"));
+            assert!(label.contains("not QES"));
+            assert!(!label.contains("QES PASS"));
         }
     }
     #[test]

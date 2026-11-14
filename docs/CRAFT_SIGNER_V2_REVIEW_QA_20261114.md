@@ -68,3 +68,17 @@ Scope:
 This is CPU-only layout/accessibility evidence. It does NOT replace a visual
 screenshot review of the actual installed app, nor does it approve the
 developer publisher or exercise a real B-Trust token.
+
+## Distinct native and verified-broker progress messages — 14 November 2026
+
+The UI now tracks the verification backend rather than displaying the
+legacy native OPC progress string for both methods. Native Verify shows
+native OPC verification, while Verify v2 explicitly names the authenticated
+Craft Signer v2 broker and states that OPC integrity is not eIDAS QES.
+No signing or trust policy is changed by this copy correction.
+
+Actual targeted Windows execution:
+cargo test -p gridcraft-ui-egui office_sign_ui::tests --lib --locked --offline
+RESULT: 6 PASS, 0 FAIL, exit code 0. The regression includes the
+source context/dirty guard, saved-file requirement, and the distinct
+native/broker progress messages without a false QES PASS assertion.
