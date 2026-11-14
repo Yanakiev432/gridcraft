@@ -49,3 +49,22 @@ The native Windows UI test
 completed_verification_does_not_apply_to_another_active_document
 PASSED (1/1, exit 0). This is distinct from the signed-module trust gate
 and does not claim certificate trust or eIDAS qualified status.
+
+## CPU-only Review accessibility acceptance — 14 November 2026
+
+A deterministic egui_kittest test builds the actual native Review ribbon and
+AccessKit tree (not a copied UI mock). The renderer is explicitly disabled
+using LazyRenderer::Uninitialized to ensure there is no GPU rendering.
+
+Scope:
+- Viewport: 1440 x 900 logical points.
+- Confirm accessible Role::Button controls Sign, Verify and Verify v2.
+- Confirm all three controls have compact ribbon-row dimensions rather than
+  the old large signature tiles, with nonnegative visible coordinates.
+- Confirm no signing operation was started.
+- Test target: review_shows_compact_sign_verify_and_verify_v2_without_gpu.
+- Actual result: 1 passed, 0 failed, exit code 0, locked/offline Windows build.
+
+This is CPU-only layout/accessibility evidence. It does NOT replace a visual
+screenshot review of the actual installed app, nor does it approve the
+developer publisher or exercise a real B-Trust token.

@@ -147,3 +147,42 @@ pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
         app.open_dialog("allowEditRanges", json!({}));
     }
 }
+
+#[cfg(all(test, target_os = "windows"))]
+mod signed_v2_ui_qa {
+    use super::*;
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    #[test]
+    fn review_shows_compact_sign_verify_and_verify_v2_without_gpu() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, crate::Services::default());
+        app.ui.ribbon_tab = "Review".into();
+        app.use_prepared_fonts();
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .with_context_setup(|ctx| {
+                ctx.set_fonts(crate::theme::pinned_font_definitions());
+                crate::theme::apply(ctx, false);
+            })
+            .renderer(egui_kittest::LazyRenderer::Uninitialized { textures_delta: Default::default(), builder: None })
+            .build_ui_state(
+                |ui, app: &mut SheetApp| {
+                    app.logic(ui.ctx());
+                    app.ui(ui);
+                },
+                app,
+            );
+        harness.run_steps(5);
+        for label in ["Sign", "Verify", "Verify v2"] {
+            let control = harness.query_by_role_and_label(Role::Button, label);
+            assert!(control.is_some(), "Review contains accessible {label} control");
+            let rect = control.unwrap().rect();
+            assert!(rect.width() > 30.0 && rect.height() <= 34.0, "Review {label} uses a compact small_button: {rect:?}");
+            assert!(rect.min.x >= 0.0 && rect.min.y >= 0.0, "Review {label} remains inside the viewport");
+        }
+        assert!(!harness.state().office_sign.busy(), "headless accessibility check does not start a signer");
+    }
+}
