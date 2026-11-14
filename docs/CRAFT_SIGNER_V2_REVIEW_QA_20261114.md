@@ -82,3 +82,24 @@ cargo test -p gridcraft-ui-egui office_sign_ui::tests --lib --locked --offline
 RESULT: 6 PASS, 0 FAIL, exit code 0. The regression includes the
 source context/dirty guard, saved-file requirement, and the distinct
 native/broker progress messages without a false QES PASS assertion.
+
+## Pinned host minimum-version gate -- 14 November 2026
+
+The native CLI and UI now both pin the exact shared core Git commit
+fafbc0b993abbb80df8457d1af2a019077ac3429. The dependency change
+was made only in the two direct Cargo manifests and Cargo.lock.
+
+The shared Rust host resolver rejects any signed module version below
+0.2.2, including the independently authenticated 0.2.1-qa release
+whose EU DSS unsigned-PDF parser is known to be incorrect. A disposable
+dual-signed-package test proves the host rejects a registration rollback,
+holds an authenticated broker file lock against mutation, accepts the
+0.2.2 release, and refuses a partial current.json registration.
+This does not claim globally persistent anti-rollback for all future
+versions or production owner approval.
+
+The updated host compile checks pass on Windows with --locked --offline,
+both for native UI and CLI. The Office dialog tests for each host contain
+6 passing tests (dirty/unsaved guard, active document view-binding,
+backend-specific progress message and existing signing guards).
+No production Craft app or real user publisher policy was changed.
