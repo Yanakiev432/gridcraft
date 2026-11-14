@@ -86,7 +86,7 @@ native/broker progress messages without a false QES PASS assertion.
 ## Pinned host minimum-version gate -- 14 November 2026
 
 The native CLI and UI now both pin the exact shared core Git commit
-fafbc0b993abbb80df8457d1af2a019077ac3429. The dependency change
+8428d93bfae3572aa719754ced0e4e6d727790ae. The dependency change
 was made only in the two direct Cargo manifests and Cargo.lock.
 
 The shared Rust host resolver rejects any signed module version below
@@ -103,3 +103,19 @@ both for native UI and CLI. The Office dialog tests for each host contain
 6 passing tests (dirty/unsaved guard, active document view-binding,
 backend-specific progress message and existing signing guards).
 No production Craft app or real user publisher policy was changed.
+
+## Absent module root: actionable fail-closed acceptance — 14 November 2026
+
+The pinned shared core detects a Windows profile where Craft/Extensions
+does not exist. It now reports explicitly that Craft Signer is not installed
+with an approved publisher, without creating any directory or approval.
+The same resolver still refuses tampered, unapproved, linked or older
+than 0.2.2 signed releases. Both the positive and negative paths are
+covered by the separate shared-core QA suite (36/36 normal, 4/4 real
+signed-package opt-in).
+
+Re-accepted on the exact pinned latest core revision:
+- Native UI + CLI cargo check --locked --offline: PASS.
+- Office signing dialog targeted tests: 6/6 PASS.
+- CPU-only native Review ribbon accessibility/layout QA: 1/1 PASS.
+- No official installed application or user publisher policy modified.
