@@ -16,6 +16,27 @@ use std::process::{Command, Stdio};
 use std::io::Read;
 use sha2::{Digest, Sha256};
 
+/// Windows file identity hints to revoke a displayed verdict when the saved
+/// file is replaced or edited. A privileged actor can forge timestamps; this
+/// is a view freshness guard, NOT a substitute for cryptographic hashing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SavedFileStamp {
+    len: u64,
+    modified: std::time::SystemTime,
+    created: std::time::SystemTime,
+}
+fn saved_file_stamp(path: &Path) -> Result<SavedFileStamp, String> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|e| format!("Cannot inspect saved document: {e}"))?;
+    Ok(SavedFileStamp {
+        len: metadata.len(),
+        modified: metadata.modified()
+            .map_err(|e| format!("Cannot read saved document modification time: {e}"))?,
+        created: metadata.created()
+            .map_err(|e| format!("Cannot read saved document creation time: {e}"))?,
+    })
+}
+
 /// Hashes saved bytes on the worker thread, in bounded memory. This is
 /// snapshot evidence, not a continuous guarantee about later disk writes.
 fn saved_file_digest(path: &Path) -> Result<[u8; 32], String> {
@@ -68,6 +89,7 @@ pub struct OfficeSignUi {
     source: Option<PathBuf>,
     /// Saved document whose bytes were checked by the async worker.
     verification_source: Option<PathBuf>,
+    verification_stamp: Option<SavedFileStamp>,
     verification_context_switched: bool,
     signed_v2_verification: bool,
     output: String,
@@ -89,6 +111,7 @@ impl OfficeSignUi {
             phase: Phase::Idle,
             source: None,
             verification_source: None,
+            verification_stamp: None,
             verification_context_switched: false,
             signed_v2_verification: false,
             output: String::new(),
@@ -144,6 +167,7 @@ impl OfficeSignUi {
             .map_err(|e| format!("Cannot start certificate enumeration: {e}"))?;
         self.source = Some(absolute);
         self.verification_source = None;
+        self.verification_stamp = None;
         self.verification_context_switched = false;
         self.selected = None; // Never silently pick a software certificate instead of the user's QES.
         self.certificates.clear();
@@ -160,6 +184,7 @@ impl OfficeSignUi {
         if dirty { return Err("Save document changes before verifying. Unsaved edits have not been cryptographically checked.".into()); }
         self.ensure_source(src)?;
         let src = src.canonicalize().map_err(|e| e.to_string())?;
+        let stamp = saved_file_stamp(&src)?;
         let tracked_source = src.clone();
         let (tx, rx) = mpsc::channel();
         std::thread::Builder::new()
@@ -176,6 +201,7 @@ impl OfficeSignUi {
             .map_err(|e| format!("Cannot start signature verification: {e}"))?;
         self.signed_v2_verification = false;
         self.verification_source = Some(tracked_source);
+        self.verification_stamp = Some(stamp);
         self.verification_context_switched = false;
         self.worker = Some(rx);
         self.started = Some(Instant::now());
@@ -196,6 +222,7 @@ impl OfficeSignUi {
             _ => return Err("Unsupported Office signature document type".into()),
         };
         let saved = src.canonicalize().map_err(|e| format!("Cannot access saved document: {e}"))?;
+        let stamp = saved_file_stamp(&saved)?;
         let tracked_source = saved.clone();
         let (tx, rx) = mpsc::channel();
         std::thread::Builder::new()
@@ -218,6 +245,7 @@ impl OfficeSignUi {
             .map_err(|e| format!("Cannot start signed-module verification: {e}"))?;
         self.signed_v2_verification = true;
         self.verification_source = Some(tracked_source);
+        self.verification_stamp = Some(stamp);
         self.verification_context_switched = false;
         self.worker = Some(rx);
         self.started = Some(Instant::now());
@@ -361,7 +389,10 @@ impl OfficeSignUi {
         if !matches!(self.phase, Phase::Verifying | Phase::Finished) { return; }
         let Some(source) = self.verification_source.as_deref() else { return; };
         let active = current.and_then(|path| path.canonicalize().ok());
-        let changed = dirty || active.as_deref() != Some(source);
+        let disk_changed = self.verification_stamp.is_none_or(|expected|
+            saved_file_stamp(source).is_err_or(|actual| actual != expected)
+        );
+        let changed = dirty || active.as_deref() != Some(source) || disk_changed;
         if self.phase == Phase::Verifying {
             self.verification_context_switched |= changed;
             return;
@@ -462,6 +493,7 @@ impl OfficeSignUi {
             self.worker = None;
             self.source = None;
             self.verification_source = None;
+            self.verification_stamp = None;
             self.verification_context_switched = false;
         }
     }
@@ -509,6 +541,7 @@ mod tests {
             dialog.success = true;
             dialog.notice = "OPC integrity PASS".into();
             dialog.verification_source = Some(saved.clone());
+            dialog.verification_stamp = Some(saved_file_stamp(&saved).unwrap());
             dialog.invalidate_if_view_changed(Some(&saved), false);
             assert!(dialog.success, "unchanged saved view retains its verdict");
             dialog.invalidate_if_view_changed(Some(&saved), true);
@@ -579,6 +612,7 @@ mod tests {
             let mut dialog = OfficeSignUi::new(extension);
             dialog.phase = Phase::Verifying;
             dialog.verification_source = Some(saved.clone());
+            dialog.verification_stamp = Some(saved_file_stamp(&saved).unwrap());
             dialog.invalidate_if_view_changed(Some(&saved), false);
             assert!(!dialog.verification_context_switched);
             dialog.invalidate_if_view_changed(Some(&other), false);
@@ -589,6 +623,29 @@ mod tests {
             assert!(dialog.notice.contains("does not apply"));
             std::fs::remove_file(&path).unwrap();
             std::fs::remove_file(&other).unwrap();
+        }
+    }
+
+
+    #[test]
+    fn external_replacement_after_verification_revokes_cached_success() {
+        for extension in ["docx", "xlsx"] {
+            let path = std::env::temp_dir().join(format!(
+                "craft-verify-external-{}-{extension}.{}", std::process::id(), extension,
+            ));
+            std::fs::write(&path, b"first saved file").unwrap();
+            let saved = path.canonicalize().unwrap();
+            let mut dialog = OfficeSignUi::new(extension);
+            dialog.verification_source = Some(saved.clone());
+            dialog.verification_stamp = Some(saved_file_stamp(&saved).unwrap());
+            dialog.phase = Phase::Finished;
+            dialog.success = true;
+            dialog.notice = "OPC integrity PASS".into();
+            std::fs::write(&path, b"externally modified saved document bytes").unwrap();
+            dialog.invalidate_if_view_changed(Some(&saved), false);
+            assert!(!dialog.success, "external disk edit invalidates displayed integrity");
+            assert!(dialog.notice.contains("does not apply"));
+            std::fs::remove_file(&path).unwrap();
         }
     }
 
