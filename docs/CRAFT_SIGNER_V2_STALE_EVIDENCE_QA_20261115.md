@@ -1,7 +1,7 @@
 # Office Verify / Verify v2 — stale-evidence hardening (source QA)
 
 Date: 2026-11-15
-Status: **SOURCE CHANGE ONLY — WINDOWS TESTS PENDING**
+Status: **WINDOWS CPU-ONLY QA PASS — code checked; no installed-module QES acceptance**
 Branch: `qa/stale-verification-evidence-20261115`
 Base: `qa/verified-signer-v2-review-20261114`
 
@@ -35,7 +35,7 @@ editor's in-memory `dirty` flag.
 4. Legacy Sign is unchanged and remains separate from Verify v2.
    The worker never invokes a PIN prompt or modifies saved files.
 
-## Added tests (not yet executed on Windows)
+## Regression tests — executed on Windows
 
 - `same_size_rewrite_during_worker_verification_is_rejected`:
   modify a synthetic saved file without changing its length between
@@ -49,9 +49,9 @@ editor's in-memory `dirty` flag.
 - All existing `office_sign_ui::tests` and the CPU-only Review ribbon
   accessibility/layout test must remain green.
 
-## Required Lenovo Windows acceptance commands
+## Lenovo Windows acceptance — executed
 
-Run in this new QA worktree **after the laptop reconnects**:
+Executed in this separate QA worktree after Lenovo reconnected:
 
 ```powershell
 $env:CARGO_BUILD_JOBS='2'
@@ -63,10 +63,24 @@ cargo test -p gridcraft-ui-egui office_sign_ui::tests --lib --locked --offline
 cargo test -p gridcraft-ui-egui review_shows_compact_sign_verify_and_verify_v2_without_gpu --lib --locked --offline
 ```
 
-Replace `gridcraft` with `wordcraft` or `gridcraft`. This QA branch must
-not replace an installed application or be merged into the previously
-accepted branch until all the commands are genuinely PASS and a clean
-remote commit matches the local test worktree.
+The source checks were executed under Windows with locked offline Cargo
+dependencies, CPU-only tests and a shared QA target directory.
+The Review test was executed from the exact compiled Rust test binary,
+without starting a wgpu renderer. No GPU job, training or installed
+Craft application was started.
+
+Acceptance on 2026-11-15:
+- office_sign_ui::tests: 9 passed, 0 failed; exit code 0.
+- Review Sign / Verify / Verify v2 no-GPU test: 1 passed, 0 failed;
+  executed from the compiled test binary; exit code 0.
+- cargo check for the UI and CLI packages: PASS; exit code 0.
+- Cargo was locked/offline with build jobs=2, incremental=false,
+  and test profile debug=0.
+- The existing unused Cargo patch entries and the deprecated
+  egui::Id::new warning remain; there were NO build errors.
+- The previously accepted QA branch is preserved, not overwritten.
+- This source-only QA checkpoint does NOT approve production release.
+
 
 ## Explicit residual risks
 
