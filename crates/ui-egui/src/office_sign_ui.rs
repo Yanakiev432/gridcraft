@@ -13,6 +13,46 @@ use craft_signing_core::office_certificates::{OfficeCertificate, list_office_cer
 use craft_signing_core::opc_native::verify_opc_inprocess;
 use std::process::{Command, Stdio};
 
+use std::io::Read;
+use sha2::{Digest, Sha256};
+
+/// Hashes saved bytes on the worker thread, in bounded memory. This is
+/// snapshot evidence, not a continuous guarantee about later disk writes.
+fn saved_file_digest(path: &Path) -> Result<[u8; 32], String> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| format!("Cannot open saved document for verification: {e}"))?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 65_536];
+    let mut total = 0_u64;
+    loop {
+        let n = file.read(&mut buffer)
+            .map_err(|e| format!("Cannot read saved document for verification: {e}"))?;
+        if n == 0 { break; }
+        total = total.checked_add(n as u64).ok_or("Saved document length overflow")?;
+        if total > 1_073_741_824 {
+            return Err("Saved document exceeds the 1 GiB verification limit.".into());
+        }
+        digest.update(&buffer[..n]);
+    }
+    Ok(digest.finalize().into())
+}
+
+/// A positive result must refer to unchanged bytes across the verification
+/// interval. A later external write still requires a new verification.
+fn verify_stable_saved_bytes(
+    path: &Path,
+    verify: impl FnOnce() -> Result<String, String>,
+) -> Result<String, String> {
+    let before = saved_file_digest(path)?;
+    let verdict = verify();
+    let after = saved_file_digest(path)?;
+    if before != after {
+        return Err("Saved document changed during signature verification. Save and verify again.".into());
+    }
+    verdict
+}
+
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
     Idle,
@@ -28,6 +68,7 @@ pub struct OfficeSignUi {
     source: Option<PathBuf>,
     /// Saved document whose bytes were checked by the async worker.
     verification_source: Option<PathBuf>,
+    verification_context_switched: bool,
     signed_v2_verification: bool,
     output: String,
     certificates: Vec<OfficeCertificate>,
@@ -48,6 +89,7 @@ impl OfficeSignUi {
             phase: Phase::Idle,
             source: None,
             verification_source: None,
+            verification_context_switched: false,
             signed_v2_verification: false,
             output: String::new(),
             certificates: Vec::new(),
@@ -102,6 +144,7 @@ impl OfficeSignUi {
             .map_err(|e| format!("Cannot start certificate enumeration: {e}"))?;
         self.source = Some(absolute);
         self.verification_source = None;
+        self.verification_context_switched = false;
         self.selected = None; // Never silently pick a software certificate instead of the user's QES.
         self.certificates.clear();
         self.allow_additional = true;
@@ -123,16 +166,17 @@ impl OfficeSignUi {
             .name("craft-opc-verify".into())
             .spawn(move || {
                 let result = std::panic::catch_unwind(|| {
-                    verify_opc_inprocess(&src).map(|n| format!(
+                    verify_stable_saved_bytes(&src, || verify_opc_inprocess(&src).map(|n| format!(
                         "Integrity PASS: {n} native OPC signature(s) verified in {}. Certificate trust, qualified status and eIDAS QES were NOT assessed.",
                         src.display(),
-                    ))
+                    )))
                 }).unwrap_or_else(|_| Err("Signature verification worker failed".into()));
                 let _ = tx.send(result);
             })
             .map_err(|e| format!("Cannot start signature verification: {e}"))?;
         self.signed_v2_verification = false;
         self.verification_source = Some(tracked_source);
+        self.verification_context_switched = false;
         self.worker = Some(rx);
         self.started = Some(Instant::now());
         self.notice.clear();
@@ -158,7 +202,7 @@ impl OfficeSignUi {
             .name("craft-signed-broker-verify".into())
             .spawn(move || {
                 let result = std::panic::catch_unwind(|| {
-                    match craft_signing_core::office_host::verify_office_via_installed_signer(
+                    verify_stable_saved_bytes(&saved, || match craft_signing_core::office_host::verify_office_via_installed_signer(
                         &saved, kind, false
                     )? {
                         craft_signing_core::broker_protocol::OfficeIntegrity::IntegrityPass => Ok(
@@ -167,13 +211,14 @@ impl OfficeSignUi {
                         craft_signing_core::broker_protocol::OfficeIntegrity::IntegrityRejected => Err(
                             "Signed module v2 rejected the Office signature integrity check.".into()
                         ),
-                    }
+                    })
                 }).unwrap_or_else(|_| Err("Authenticated Office verification worker failed".into()));
                 let _ = tx.send(result);
             })
             .map_err(|e| format!("Cannot start signed-module verification: {e}"))?;
         self.signed_v2_verification = true;
         self.verification_source = Some(tracked_source);
+        self.verification_context_switched = false;
         self.worker = Some(rx);
         self.started = Some(Instant::now());
         self.notice.clear();
@@ -310,13 +355,18 @@ impl OfficeSignUi {
             if let Some(result) = done { self.finish(result); }
         }
     }
-    /// A positive result concerns the file saved at dispatch, never a
-    /// different active document or later unsaved changes.
+    /// Track any view switch or unsaved edit while verification is pending:
+    /// returning to the original tab must never resurrect a worker verdict.
     fn invalidate_if_view_changed(&mut self, current: Option<&Path>, dirty: bool) {
-        if self.phase != Phase::Finished || !self.success { return; }
+        if !matches!(self.phase, Phase::Verifying | Phase::Finished) { return; }
         let Some(source) = self.verification_source.as_deref() else { return; };
         let active = current.and_then(|path| path.canonicalize().ok());
-        if dirty || active.as_deref() != Some(source) {
+        let changed = dirty || active.as_deref() != Some(source);
+        if self.phase == Phase::Verifying {
+            self.verification_context_switched |= changed;
+            return;
+        }
+        if self.success && (changed || self.verification_context_switched) {
             self.success = false;
             self.notice = "The document changed or the active document was switched after verification. The previous integrity result does not apply to the current editor view. Save and verify again.".into();
         }
@@ -329,6 +379,7 @@ impl OfficeSignUi {
         }
     }
     pub fn show(&mut self, ctx: &egui::Context, current: Option<&Path>, dirty: bool) {
+        self.invalidate_if_view_changed(current, dirty);
         self.poll();
         self.invalidate_if_view_changed(current, dirty);
         if self.phase == Phase::Idle { return; }
@@ -411,6 +462,7 @@ impl OfficeSignUi {
             self.worker = None;
             self.source = None;
             self.verification_source = None;
+            self.verification_context_switched = false;
         }
     }
 }
@@ -493,4 +545,51 @@ mod tests {
             assert!(!dialog.busy());
         }
     }
+
+    #[test]
+    fn same_size_rewrite_during_worker_verification_is_rejected() {
+        for extension in ["docx", "xlsx"] {
+            let path = std::env::temp_dir().join(format!(
+                "craft-verify-digest-{}-{extension}.{}", std::process::id(), extension,
+            ));
+            std::fs::write(&path, b"one-one").unwrap();
+            let result = verify_stable_saved_bytes(&path, || {
+                std::fs::write(&path, b"two-two").unwrap();
+                Ok("OPC integrity PASS".into())
+            });
+            assert!(result.is_err(), "same-length byte substitution must fail closed");
+            assert!(result.unwrap_err().contains("changed during signature verification"));
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
+
+    #[test]
+    fn switching_away_and_back_while_verification_runs_invalidates_success() {
+        for extension in ["docx", "xlsx"] {
+            let path = std::env::temp_dir().join(format!(
+                "craft-verify-active-{}-{extension}.{}", std::process::id(), extension,
+            ));
+            std::fs::write(&path, b"synthetic snapshot").unwrap();
+            let saved = path.canonicalize().unwrap();
+            let other = std::env::temp_dir().join(format!(
+                "craft-verify-other-{}-{extension}.{}", std::process::id(), extension,
+            ));
+            std::fs::write(&other, b"another document").unwrap();
+            let other = other.canonicalize().unwrap();
+            let mut dialog = OfficeSignUi::new(extension);
+            dialog.phase = Phase::Verifying;
+            dialog.verification_source = Some(saved.clone());
+            dialog.invalidate_if_view_changed(Some(&saved), false);
+            assert!(!dialog.verification_context_switched);
+            dialog.invalidate_if_view_changed(Some(&other), false);
+            dialog.invalidate_if_view_changed(Some(&saved), false);
+            dialog.finish(Ok("OPC integrity PASS".into()));
+            dialog.invalidate_if_view_changed(Some(&saved), false);
+            assert!(!dialog.success, "returning to a prior tab cannot resurrect a verdict");
+            assert!(dialog.notice.contains("does not apply"));
+            std::fs::remove_file(&path).unwrap();
+            std::fs::remove_file(&other).unwrap();
+        }
+    }
+
 }
