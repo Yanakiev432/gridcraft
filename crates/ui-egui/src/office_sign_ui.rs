@@ -58,8 +58,8 @@ fn saved_file_digest(path: &Path) -> Result<[u8; 32], String> {
     Ok(digest.finalize().into())
 }
 
-/// A positive result must refer to unchanged bytes across the verification
-/// interval. A later external write still requires a new verification.
+/// Rejects differing pre/post SHA-256 digests. This does not prevent a
+/// concurrent writer from restoring the original bytes before the second hash.
 fn verify_stable_saved_bytes(
     path: &Path,
     verify: impl FnOnce() -> Result<String, String>,
@@ -390,7 +390,7 @@ impl OfficeSignUi {
         let Some(source) = self.verification_source.as_deref() else { return; };
         let active = current.and_then(|path| path.canonicalize().ok());
         let disk_changed = self.verification_stamp.is_none_or(|expected|
-            saved_file_stamp(source).is_err_or(|actual| actual != expected)
+            saved_file_stamp(source).map_or(true, |actual| actual != expected)
         );
         let changed = dirty || active.as_deref() != Some(source) || disk_changed;
         if self.phase == Phase::Verifying {
