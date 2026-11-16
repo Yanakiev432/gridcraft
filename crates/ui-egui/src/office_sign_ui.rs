@@ -1,6 +1,6 @@
 //! Windows XLSX OPC signing workflow for the Review ribbon.
 //! Cryptographic integrity does not establish certificate trust or eIDAS QES.
-//! Signed v2 Sign uses a verified broker and bounded process family; a separate legacy QA path exists only for comparison. Windows controls the key and PIN.
+//! All Office signing uses the authenticated Craft Signer v2 broker and bounded process family. Windows controls the key and PIN.
 //! Never write into the source file or replace an existing signed destination.
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 
 use craft_signing_core::office_certificates::{OfficeCertificate, list_office_certificates};
 use craft_signing_core::opc_native::verify_opc_inprocess;
-use std::process::{Command, Stdio};
 
 use std::io::Read;
 use sha2::{Digest, Sha256};
@@ -92,7 +91,6 @@ pub struct OfficeSignUi {
     verification_stamp: Option<SavedFileStamp>,
     verification_context_switched: bool,
     signed_v2_verification: bool,
-    signed_v2_signing: bool,
     output: String,
     certificates: Vec<OfficeCertificate>,
     selected: Option<usize>,
@@ -115,7 +113,6 @@ impl OfficeSignUi {
             verification_stamp: None,
             verification_context_switched: false,
             signed_v2_verification: false,
-            signed_v2_signing: false,
             output: String::new(),
             certificates: Vec::new(),
             selected: None,
@@ -172,7 +169,6 @@ impl OfficeSignUi {
         self.verification_stamp = None;
         self.verification_context_switched = false;
         self.selected = None; // Never silently pick a software certificate instead of the user's QES.
-        self.signed_v2_signing = false;
         self.certificates.clear();
         self.allow_additional = true;
         self.cancel.store(false, Ordering::SeqCst);
@@ -214,7 +210,7 @@ impl OfficeSignUi {
         Ok(())
     }
     /// Read-only v2 verification uses only an owner-approved, CMS-authenticated
-    /// Craft Signer module. Legacy native Verify and Sign remain independent.
+    /// Craft Signer module. Native Verify is read-only; Sign always uses the authenticated broker.
     pub fn verify_v2(&mut self, src: &Path, dirty: bool) -> Result<(), String> {
         if self.busy() { return Err("Complete the current signing or verification first.".into()); }
         if dirty { return Err("Save document changes first. The signed-module verifier only checks saved bytes.".into()); }
@@ -272,87 +268,7 @@ impl OfficeSignUi {
         }
         Ok(())
     }
-    fn start_sign(&mut self, current: Option<&Path>, dirty: bool) -> Result<(), String> {
-        if self.phase != Phase::Choosing { return Err("Choose a certificate first.".into()); }
-        if dirty { return Err("Save document changes before signing. Unsaved edits are not signed.".into()); }
-        let source = self.source.clone().ok_or("Source document missing")?;
-        if current.and_then(|p| p.canonicalize().ok()).as_deref() != Some(source.as_path()) {
-            return Err("The active document changed. Reopen the signing dialog for that document.".into());
-        }
-        self.ensure_source(&source)?;
-        let index = self.selected.ok_or("Select a signing certificate explicitly.")?;
-        let cert = self.certificates.get(index).ok_or("Selected certificate no longer exists")?;
-        if !cert.has_private_key || !cert.valid_now {
-            return Err("Selected certificate has no usable private key or is not currently valid.".into());
-        }
-        let target = PathBuf::from(self.output.trim());
-        self.validate_destination(&target)?;
-        let thumbprint = cert.thumbprint.clone();
-        self.signed_v2_signing = false;
-        let allow_additional = self.allow_additional;
-        self.cancel.store(false, Ordering::SeqCst);
-        let cancel = Arc::clone(&self.cancel);
-        let (tx, rx) = mpsc::channel();
-        std::thread::Builder::new().name("craft-opc-sign".into()).spawn(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                // The pinned CLI calls the native Windows OPC provider inside an isolated child.
-                // Kill that process tree on cancellation or after the 180-second deadline.
-                // No PowerShell signer or environment-supplied helper path.
-                // Stable first-party extension slot: the versioned signer
-                // worker lives outside the host installation. No arbitrary
-                // executable paths from JSON or the search PATH are executed.
-                let cli = crate::signer_extension::resolve_worker()?;
-                let mut child = Command::new(cli)
-                    .arg("opc-sign").arg(&source).arg(&target)
-                    .arg("--thumbprint").arg(&thumbprint)
-                    .arg(if allow_additional {
-                        "--allow-additional-signatures"
-                    } else {
-                        "--restrict-additional-signatures"
-                    })
-                    .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
-                    .spawn().map_err(|e| format!("Cannot start the isolated signing companion: {e}"))?;
-                let started = Instant::now();
-                loop {
-                    let cancelled = cancel.load(Ordering::SeqCst);
-                    let timed_out = started.elapsed() >= Duration::from_secs(180);
-                    if cancelled || timed_out {
-                        // Windows TASKKILL /T also stops any provider helpers launched by the CLI.
-                        let status = Command::new(r"C:\Windows\System32\taskkill.exe")
-                            .arg("/F").arg("/T").arg("/PID").arg(child.id().to_string())
-                            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
-                            .status().map_err(|e| format!("Cannot terminate signer process tree: {e}"))?;
-                        if !status.success() { let _ = child.kill(); }
-                        let _ = child.wait();
-                        return Err(if cancelled {
-                            "Signing cancelled. Check destination before retrying; any completed new copy is not overwritten."
-                        } else {
-                            "Signing exceeded 180 seconds and was terminated. Verify destination before retrying."
-                        }.into());
-                    }
-                    match child.try_wait().map_err(|e| e.to_string())? {
-                        Some(status) if status.success() => break,
-                        Some(status) => return Err(format!(
-                            "Isolated signer exited with {status}. No signature accepted; check token/PIN and file rights."
-                        )),
-                        None => std::thread::sleep(Duration::from_millis(100)),
-                    }
-                }
-                let count = verify_opc_inprocess(&target)?;
-                Ok(format!(
-                    "Signature integrity PASS: {count} signature(s). Created NEW copy: {}. Certificate trust and eIDAS QES still require an independent validation.",
-                    target.display(),
-                ))
-            })).unwrap_or_else(|_| Err("Windows signing worker failed; inspect output before retrying".into()));
-            let _ = tx.send(result);
-        }).map_err(|e| format!("Cannot start isolated signing: {e}"))?;
-        self.worker = Some(rx);
-        self.started = Some(Instant::now());
-        self.phase = Phase::Signing;
-        self.notice.clear();
-        Ok(())
-    }
-    /// Explicit v2 signing from a native user gesture, never a fallback to legacy CLI.
+    /// Explicit Office signing from a native user gesture; no direct CLI fallback.
     /// The signed module remains responsible for the Windows provider's PIN UI.
     fn start_sign_v2(&mut self, current: Option<&Path>, dirty: bool) -> Result<(), String> {
         if self.phase != Phase::Choosing {
@@ -410,7 +326,6 @@ impl OfficeSignUi {
         self.worker = Some(rx);
         self.started = Some(Instant::now());
         self.phase = Phase::Signing;
-        self.signed_v2_signing = true;
         self.notice.clear();
         self.success = false;
         Ok(())
@@ -527,10 +442,7 @@ impl OfficeSignUi {
                         ui.horizontal(|ui| {
                             let eligible = self.selected.and_then(|i| self.certificates.get(i))
                                 .is_some_and(|cert| cert.has_private_key && cert.valid_now);
-                            if ui.add_enabled(eligible, egui::Button::new("Sign new copy (legacy QA)")).clicked() {
-                                if let Err(err) = self.start_sign(current, dirty) { self.notice = err; }
-                            }
-                            if ui.add_enabled(eligible, egui::Button::new("Sign new copy (authenticated v2)")).clicked() {
+                            if ui.add_enabled(eligible, egui::Button::new("Sign new copy")).clicked() {
                                 if let Err(err) = self.start_sign_v2(current, dirty) { self.notice = err; }
                             }
                             if ui.button("Cancel").clicked() { close = true; }
@@ -538,12 +450,8 @@ impl OfficeSignUi {
                     }
                     Phase::Signing => {
                         ui.spinner();
-                        ui.label(if self.signed_v2_signing {
-                            "Authenticated Craft Signer v2 broker is running. Check the Windows provider PIN dialog."
-                        } else {
-                            "Legacy QA signing worker is running. Check any Windows provider PIN dialog."
-                        });
-                        if let Some(t) = self.started { ui.label(format!("Elapsed: {} seconds (worker limit: {} seconds)", t.elapsed().as_secs(), if self.signed_v2_signing { 340 } else { 180 })); }
+                        ui.label("Authenticated Craft Signer broker is running. Check the Windows provider PIN dialog.");
+                        if let Some(t) = self.started { ui.label(format!("Elapsed: {} seconds (worker limit: 340 seconds)", t.elapsed().as_secs())); }
                         if ui.button("Cancel signing").clicked() {
                             self.cancel.store(true, Ordering::SeqCst);
                             ui.label("Cancellation requested; waiting for worker confirmation.");
@@ -583,7 +491,6 @@ mod tests {
         assert!(dialog.start_sign_v2(None, true).unwrap_err().contains("Save"));
         assert!(dialog.start_sign_v2(None, false).is_err());
         assert!(dialog.worker.is_none());
-        assert!(!dialog.signed_v2_signing);
     }
 
     #[test]
@@ -599,7 +506,6 @@ mod tests {
         dialog.selected = None;
         assert!(dialog.start_sign_v2(Some(&source), false).unwrap_err().contains("certificate"));
         assert!(dialog.worker.is_none());
-        assert!(!dialog.signed_v2_signing);
         std::fs::remove_file(path).unwrap();
     }
     #[test]
