@@ -1,6 +1,6 @@
 //! Windows XLSX OPC signing workflow for the Review ribbon.
 //! Cryptographic integrity does not establish certificate trust or eIDAS QES.
-//! The GUI launches the matching pinned CLI in a separate, bounded process; Windows controls the key and PIN.
+//! Signed v2 Sign uses a verified broker and bounded process family; a separate legacy QA path exists only for comparison. Windows controls the key and PIN.
 //! Never write into the source file or replace an existing signed destination.
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -486,7 +486,7 @@ impl OfficeSignUi {
         }
         let mut close = false;
         egui::Window::new(format!("{} digital signatures", self.extension.to_ascii_uppercase()))
-            .id(egui::Id::new(format!("craft-opc-sign-{}", self.extension)))
+            .id(egui::Id::unique(format!("craft-opc-sign-{}", self.extension)))
             .collapsible(false)
             .resizable(true)
             .min_width(430.0)
@@ -520,7 +520,7 @@ impl OfficeSignUi {
                         ui.label("New signed-copy destination (must not already exist):");
                         ui.text_edit_singleline(&mut self.output);
                         ui.small("Native OPC permits additional independent signatures. Restricting later signatures is not available in this backend.");
-                        ui.small("Authenticated v2 requires a newly signed module with the explicit signing-policy protocol. The immutable 0.2.2 QA module does not support it.");
+                        ui.small("Authenticated v2 Sign requires Craft Signer 0.2.3 or newer. The immutable 0.2.2 module can verify but cannot sign through the explicit policy protocol.");
                         ui.small("The token/provider opens its OWN PIN prompt. Do not enter a PIN into Craft.");
                         ui.small("A successful integrity check does not by itself certify the signer as qualified under eIDAS.");
                         if !self.notice.is_empty() { ui.colored_label(egui::Color32::YELLOW, &self.notice); }

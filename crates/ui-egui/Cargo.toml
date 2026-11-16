@@ -31,7 +31,7 @@ web-time = { workspace = true }
 # accessibility bus; pinned to one version so nothing is built twice.
 [target.'cfg(target_os = "windows")'.dependencies]
 sha2 = { workspace = true }
-craft-signing-core = { version = "=0.1.0", git = "https://github.com/Yanakiev432/craft-signing-core.git", rev = "9ed10f89e3462917a5339f9c0c2bdf2e8f8ec9be" }
+craft-signing-core = { version = "=0.1.0", git = "https://github.com/Yanakiev432/craft-signing-core.git", rev = "5b5c14c4e7668cf15cce128750b80a6113fc5f31" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "=5.19.0"
