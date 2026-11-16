@@ -92,6 +92,7 @@ pub struct OfficeSignUi {
     verification_stamp: Option<SavedFileStamp>,
     verification_context_switched: bool,
     signed_v2_verification: bool,
+    signed_v2_signing: bool,
     output: String,
     certificates: Vec<OfficeCertificate>,
     selected: Option<usize>,
@@ -114,6 +115,7 @@ impl OfficeSignUi {
             verification_stamp: None,
             verification_context_switched: false,
             signed_v2_verification: false,
+            signed_v2_signing: false,
             output: String::new(),
             certificates: Vec::new(),
             selected: None,
@@ -170,6 +172,7 @@ impl OfficeSignUi {
         self.verification_stamp = None;
         self.verification_context_switched = false;
         self.selected = None; // Never silently pick a software certificate instead of the user's QES.
+        self.signed_v2_signing = false;
         self.certificates.clear();
         self.allow_additional = true;
         self.cancel.store(false, Ordering::SeqCst);
@@ -285,6 +288,7 @@ impl OfficeSignUi {
         let target = PathBuf::from(self.output.trim());
         self.validate_destination(&target)?;
         let thumbprint = cert.thumbprint.clone();
+        self.signed_v2_signing = false;
         let allow_additional = self.allow_additional;
         self.cancel.store(false, Ordering::SeqCst);
         let cancel = Arc::clone(&self.cancel);
@@ -346,6 +350,69 @@ impl OfficeSignUi {
         self.started = Some(Instant::now());
         self.phase = Phase::Signing;
         self.notice.clear();
+        Ok(())
+    }
+    /// Explicit v2 signing from a native user gesture, never a fallback to legacy CLI.
+    /// The signed module remains responsible for the Windows provider's PIN UI.
+    fn start_sign_v2(&mut self, current: Option<&Path>, dirty: bool) -> Result<(), String> {
+        if self.phase != Phase::Choosing {
+            return Err("Choose a certificate before signing.".into());
+        }
+        if dirty {
+            return Err("Save Office changes before using the signed module.".into());
+        }
+        let source = self.source.clone().ok_or("No saved Office document selected")?;
+        if current.and_then(|p| p.canonicalize().ok()).as_deref() != Some(source.as_path()) {
+            return Err("The active document changed. Reopen the signing dialog.".into());
+        }
+        self.ensure_source(&source)?;
+        let index = self.selected.ok_or("Select a Windows signing certificate explicitly.")?;
+        let certificate = self.certificates.get(index).ok_or("Selected certificate disappeared")?;
+        if !certificate.has_private_key || !certificate.valid_now {
+            return Err("The selected Windows certificate cannot currently sign.".into());
+        }
+        if !self.allow_additional {
+            return Err("Restricting future Office signatures is not implemented. No signing attempted.".into());
+        }
+        let target = PathBuf::from(self.output.trim());
+        self.validate_destination(&target)?;
+        let kind = match self.extension {
+            "docx" => craft_signing_core::broker_protocol::OfficeKind::Docx,
+            "xlsx" => craft_signing_core::broker_protocol::OfficeKind::Xlsx,
+            _ => return Err("Unsupported Office signing format.".into()),
+        };
+        let thumbprint = certificate.thumbprint.clone();
+        let cancel = Arc::clone(&self.cancel);
+        self.cancel.store(false, Ordering::SeqCst);
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("craft-authenticated-v2-opc-sign".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    craft_signing_core::office_host_sign::sign_office_via_installed_signer(
+                        &source,
+                        &target,
+                        kind,
+                        false,
+                        craft_signing_core::broker_protocol::OfficeSignChoice::AllowAdditional,
+                        &thumbprint,
+                        &cancel,
+                    )
+                    .map(|signed| format!(
+                        "Authenticated Craft Signer v2: OPC signature integrity PASS in NEW file: {}. Certificate trust, revocation and eIDAS QES were NOT assessed.",
+                        signed.display(),
+                    ))
+                }))
+                .unwrap_or_else(|_| Err("Authenticated v2 signer failed; inspect the output before retrying".into()));
+                let _ = tx.send(result);
+            })
+            .map_err(|e| format!("Cannot start authenticated v2 signing worker: {e}"))?;
+        self.worker = Some(rx);
+        self.started = Some(Instant::now());
+        self.phase = Phase::Signing;
+        self.signed_v2_signing = true;
+        self.notice.clear();
+        self.success = false;
         Ok(())
     }
     fn finish(&mut self, result: Result<String, String>) {
@@ -453,22 +520,30 @@ impl OfficeSignUi {
                         ui.label("New signed-copy destination (must not already exist):");
                         ui.text_edit_singleline(&mut self.output);
                         ui.small("Native OPC permits additional independent signatures. Restricting later signatures is not available in this backend.");
+                        ui.small("Authenticated v2 requires a newly signed module with the explicit signing-policy protocol. The immutable 0.2.2 QA module does not support it.");
                         ui.small("The token/provider opens its OWN PIN prompt. Do not enter a PIN into Craft.");
                         ui.small("A successful integrity check does not by itself certify the signer as qualified under eIDAS.");
                         if !self.notice.is_empty() { ui.colored_label(egui::Color32::YELLOW, &self.notice); }
                         ui.horizontal(|ui| {
                             let eligible = self.selected.and_then(|i| self.certificates.get(i))
                                 .is_some_and(|cert| cert.has_private_key && cert.valid_now);
-                            if ui.add_enabled(eligible, egui::Button::new("Sign new copy")).clicked() {
+                            if ui.add_enabled(eligible, egui::Button::new("Sign new copy (legacy QA)")).clicked() {
                                 if let Err(err) = self.start_sign(current, dirty) { self.notice = err; }
+                            }
+                            if ui.add_enabled(eligible, egui::Button::new("Sign new copy (authenticated v2)")).clicked() {
+                                if let Err(err) = self.start_sign_v2(current, dirty) { self.notice = err; }
                             }
                             if ui.button("Cancel").clicked() { close = true; }
                         });
                     }
                     Phase::Signing => {
                         ui.spinner();
-                        ui.label("The isolated Windows signing worker is running. Check any B-Trust PIN dialog.");
-                        if let Some(t) = self.started { ui.label(format!("Elapsed: {} seconds (worker limit: 180 seconds)", t.elapsed().as_secs())); }
+                        ui.label(if self.signed_v2_signing {
+                            "Authenticated Craft Signer v2 broker is running. Check the Windows provider PIN dialog."
+                        } else {
+                            "Legacy QA signing worker is running. Check any Windows provider PIN dialog."
+                        });
+                        if let Some(t) = self.started { ui.label(format!("Elapsed: {} seconds (worker limit: {} seconds)", t.elapsed().as_secs(), if self.signed_v2_signing { 340 } else { 180 })); }
                         if ui.button("Cancel signing").clicked() {
                             self.cancel.store(true, Ordering::SeqCst);
                             ui.label("Cancellation requested; waiting for worker confirmation.");
@@ -501,6 +576,32 @@ impl OfficeSignUi {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn v2_sign_never_bypasses_explicit_saved_document_or_certificate_selection() {
+        let mut dialog = OfficeSignUi::new("docx");
+        dialog.phase = Phase::Choosing;
+        assert!(dialog.start_sign_v2(None, true).unwrap_err().contains("Save"));
+        assert!(dialog.start_sign_v2(None, false).is_err());
+        assert!(dialog.worker.is_none());
+        assert!(!dialog.signed_v2_signing);
+    }
+
+    #[test]
+    fn v2_sign_cannot_run_without_selected_identity_even_for_saved_office_file() {
+        let mut dialog = OfficeSignUi::new("xlsx");
+        let path = std::env::temp_dir().join(format!(
+            "craft-v2-sign-explicit-cert-{}.xlsx", std::process::id()
+        ));
+        std::fs::write(&path, b"PK\\x03\\x04synthetic-not-signed").unwrap();
+        let source = path.canonicalize().unwrap();
+        dialog.phase = Phase::Choosing;
+        dialog.source = Some(source.clone());
+        dialog.selected = None;
+        assert!(dialog.start_sign_v2(Some(&source), false).unwrap_err().contains("certificate"));
+        assert!(dialog.worker.is_none());
+        assert!(!dialog.signed_v2_signing);
+        std::fs::remove_file(path).unwrap();
+    }
     #[test]
     fn refusal_to_overwrite_and_wrong_extension() {
         let mut dialog = OfficeSignUi::new("docx");
