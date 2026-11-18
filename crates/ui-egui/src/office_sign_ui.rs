@@ -1,0 +1,659 @@
+//! Windows XLSX OPC signing workflow for the Review ribbon.
+//! Cryptographic integrity does not establish certificate trust or eIDAS QES.
+//! All Office signing uses the authenticated Craft Signer v2 broker and bounded process family. Windows controls the key and PIN.
+//! Never write into the source file or replace an existing signed destination.
+use std::path::{Path, PathBuf};
+use std::sync::{
+    Arc, mpsc::{self, Receiver, TryRecvError},
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::{Duration, Instant};
+
+use craft_signing_core::office_certificates::{OfficeCertificate, list_office_certificates};
+use craft_signing_core::opc_native::verify_opc_inprocess;
+
+use std::io::Read;
+use sha2::{Digest, Sha256};
+
+/// Windows file identity hints to revoke a displayed verdict when the saved
+/// file is replaced or edited. A privileged actor can forge timestamps; this
+/// is a view freshness guard, NOT a substitute for cryptographic hashing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SavedFileStamp {
+    len: u64,
+    modified: std::time::SystemTime,
+    created: std::time::SystemTime,
+}
+fn saved_file_stamp(path: &Path) -> Result<SavedFileStamp, String> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|e| format!("Cannot inspect saved document: {e}"))?;
+    Ok(SavedFileStamp {
+        len: metadata.len(),
+        modified: metadata.modified()
+            .map_err(|e| format!("Cannot read saved document modification time: {e}"))?,
+        created: metadata.created()
+            .map_err(|e| format!("Cannot read saved document creation time: {e}"))?,
+    })
+}
+
+/// Hashes saved bytes on the worker thread, in bounded memory. This is
+/// snapshot evidence, not a continuous guarantee about later disk writes.
+fn saved_file_digest(path: &Path) -> Result<[u8; 32], String> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| format!("Cannot open saved document for verification: {e}"))?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 65_536];
+    let mut total = 0_u64;
+    loop {
+        let n = file.read(&mut buffer)
+            .map_err(|e| format!("Cannot read saved document for verification: {e}"))?;
+        if n == 0 { break; }
+        total = total.checked_add(n as u64).ok_or("Saved document length overflow")?;
+        if total > 1_073_741_824 {
+            return Err("Saved document exceeds the 1 GiB verification limit.".into());
+        }
+        digest.update(&buffer[..n]);
+    }
+    Ok(digest.finalize().into())
+}
+
+/// Rejects differing pre/post SHA-256 digests. This does not prevent a
+/// concurrent writer from restoring the original bytes before the second hash.
+fn verify_stable_saved_bytes(
+    path: &Path,
+    verify: impl FnOnce() -> Result<String, String>,
+) -> Result<String, String> {
+    let before = saved_file_digest(path)?;
+    let verdict = verify();
+    let after = saved_file_digest(path)?;
+    if before != after {
+        return Err("Saved document changed during signature verification. Save and verify again.".into());
+    }
+    verdict
+}
+
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Phase {
+    Idle,
+    Listing,
+    Choosing,
+    Signing,
+    Verifying,
+    Finished,
+}
+pub struct OfficeSignUi {
+    extension: &'static str,
+    phase: Phase,
+    source: Option<PathBuf>,
+    /// Saved document whose bytes were checked by the async worker.
+    verification_source: Option<PathBuf>,
+    verification_stamp: Option<SavedFileStamp>,
+    verification_context_switched: bool,
+    signed_v2_verification: bool,
+    output: String,
+    certificates: Vec<OfficeCertificate>,
+    selected: Option<usize>,
+    allow_additional: bool,
+    inventory: Option<Receiver<Result<Vec<OfficeCertificate>, String>>>,
+    worker: Option<Receiver<Result<String, String>>>,
+    cancel: Arc<AtomicBool>,
+    started: Option<Instant>,
+    notice: String,
+    success: bool,
+}
+impl OfficeSignUi {
+    pub fn new(extension: &'static str) -> Self {
+        assert!(matches!(extension, "docx" | "xlsx"));
+        Self {
+            extension,
+            phase: Phase::Idle,
+            source: None,
+            verification_source: None,
+            verification_stamp: None,
+            verification_context_switched: false,
+            signed_v2_verification: false,
+            output: String::new(),
+            certificates: Vec::new(),
+            selected: None,
+            allow_additional: true,
+            inventory: None,
+            worker: None,
+            cancel: Arc::new(AtomicBool::new(false)),
+            started: None,
+            notice: String::new(),
+            success: false,
+        }
+    }
+    pub fn busy(&self) -> bool {
+        matches!(self.phase, Phase::Listing | Phase::Choosing | Phase::Signing | Phase::Verifying)
+    }
+    fn ensure_source(&self, file: &Path) -> Result<(), String> {
+        if !file.is_file() {
+            return Err(format!("Save the workbook/document as .{} before using digital signatures.", self.extension));
+        }
+        if !file.extension().and_then(|x| x.to_str())
+            .is_some_and(|x| x.eq_ignore_ascii_case(self.extension)) {
+            return Err(format!("Only saved .{} files are supported for this signature workflow.", self.extension));
+        }
+        Ok(())
+    }
+    fn proposed_output(&self, src: &Path) -> Result<PathBuf, String> {
+        let parent = src.parent().ok_or("Source folder is missing")?;
+        let stem = src.file_stem().and_then(|s| s.to_str()).ok_or("Invalid source filename")?;
+        for n in 1..=10_000 {
+            let suffix = if n == 1 { String::new() } else { format!("-{n}") };
+            let candidate = parent.join(format!("{stem}-signed{suffix}.{}", self.extension));
+            if !candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+        Err("Cannot choose a non-existing signed-copy filename".into())
+    }
+    pub fn begin(&mut self, src: &Path) -> Result<(), String> {
+        if self.busy() { return Err("Another certificate/signature operation is active.".into()); }
+        self.ensure_source(src)?;
+        let absolute = src.canonicalize().map_err(|e| format!("Cannot access saved source: {e}"))?;
+        self.output = self.proposed_output(&absolute)?.to_string_lossy().to_string();
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("craft-cert-inventory".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(list_office_certificates)
+                    .unwrap_or_else(|_| Err("Windows certificate enumeration failed".into()));
+                let _ = tx.send(result);
+            })
+            .map_err(|e| format!("Cannot start certificate enumeration: {e}"))?;
+        self.source = Some(absolute);
+        self.verification_source = None;
+        self.verification_stamp = None;
+        self.verification_context_switched = false;
+        self.selected = None; // Never silently pick a software certificate instead of the user's QES.
+        self.certificates.clear();
+        self.allow_additional = true;
+        self.cancel.store(false, Ordering::SeqCst);
+        self.inventory = Some(rx);
+        self.worker = None;
+        self.notice.clear();
+        self.phase = Phase::Listing;
+        Ok(())
+    }
+    pub fn verify(&mut self, src: &Path, dirty: bool) -> Result<(), String> {
+        if self.busy() { return Err("Complete the current signature operation first.".into()); }
+        if dirty { return Err("Save document changes before verifying. Unsaved edits have not been cryptographically checked.".into()); }
+        self.ensure_source(src)?;
+        let src = src.canonicalize().map_err(|e| e.to_string())?;
+        let stamp = saved_file_stamp(&src)?;
+        let tracked_source = src.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("craft-opc-verify".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(|| {
+                    verify_stable_saved_bytes(&src, || verify_opc_inprocess(&src).map(|n| format!(
+                        "Integrity PASS: {n} native OPC signature(s) verified in {}. Certificate trust, qualified status and eIDAS QES were NOT assessed.",
+                        src.display(),
+                    )))
+                }).unwrap_or_else(|_| Err("Signature verification worker failed".into()));
+                let _ = tx.send(result);
+            })
+            .map_err(|e| format!("Cannot start signature verification: {e}"))?;
+        self.signed_v2_verification = false;
+        self.verification_source = Some(tracked_source);
+        self.verification_stamp = Some(stamp);
+        self.verification_context_switched = false;
+        self.worker = Some(rx);
+        self.started = Some(Instant::now());
+        self.notice.clear();
+        self.success = false;
+        self.phase = Phase::Verifying;
+        Ok(())
+    }
+    /// Read-only v2 verification uses only an owner-approved, CMS-authenticated
+    /// Craft Signer module. Native Verify is read-only; Sign always uses the authenticated broker.
+    pub fn verify_v2(&mut self, src: &Path, dirty: bool) -> Result<(), String> {
+        if self.busy() { return Err("Complete the current signing or verification first.".into()); }
+        if dirty { return Err("Save document changes first. The signed-module verifier only checks saved bytes.".into()); }
+        self.ensure_source(src)?;
+        let kind = match self.extension {
+            "docx" => craft_signing_core::broker_protocol::OfficeKind::Docx,
+            "xlsx" => craft_signing_core::broker_protocol::OfficeKind::Xlsx,
+            _ => return Err("Unsupported Office signature document type".into()),
+        };
+        let saved = src.canonicalize().map_err(|e| format!("Cannot access saved document: {e}"))?;
+        let stamp = saved_file_stamp(&saved)?;
+        let tracked_source = saved.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("craft-signed-broker-verify".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(|| {
+                    verify_stable_saved_bytes(&saved, || match craft_signing_core::office_host::verify_office_via_installed_signer(
+                        &saved, kind, false
+                    )? {
+                        craft_signing_core::broker_protocol::OfficeIntegrity::IntegrityPass => Ok(
+                            format!("Signed module v2: OPC integrity PASS for {}. Certificate trust and eIDAS QES were NOT assessed.", saved.display())
+                        ),
+                        craft_signing_core::broker_protocol::OfficeIntegrity::IntegrityRejected => Err(
+                            "Signed module v2 rejected the Office signature integrity check.".into()
+                        ),
+                    })
+                }).unwrap_or_else(|_| Err("Authenticated Office verification worker failed".into()));
+                let _ = tx.send(result);
+            })
+            .map_err(|e| format!("Cannot start signed-module verification: {e}"))?;
+        self.signed_v2_verification = true;
+        self.verification_source = Some(tracked_source);
+        self.verification_stamp = Some(stamp);
+        self.verification_context_switched = false;
+        self.worker = Some(rx);
+        self.started = Some(Instant::now());
+        self.notice.clear();
+        self.success = false;
+        self.phase = Phase::Verifying;
+        Ok(())
+    }
+    pub fn validate_destination(&self, destination: &Path) -> Result<(), String> {
+        let source = self.source.as_deref().ok_or("No saved document selected")?;
+        if !destination.is_absolute() { return Err("Enter an absolute destination path.".into()); }
+        if destination == source || destination.exists() {
+            return Err("The signed copy must be a NEW file; existing files will never be overwritten.".into());
+        }
+        if destination.extension().and_then(|s| s.to_str())
+            .is_none_or(|s| !s.eq_ignore_ascii_case(self.extension)) {
+            return Err(format!("The signed copy must have a .{} extension.", self.extension));
+        }
+        if !destination.parent().is_some_and(|p| p.is_dir()) {
+            return Err("The destination folder does not exist.".into());
+        }
+        Ok(())
+    }
+    /// Explicit Office signing from a native user gesture; no direct CLI fallback.
+    /// The signed module remains responsible for the Windows provider's PIN UI.
+    fn start_sign_v2(&mut self, current: Option<&Path>, dirty: bool) -> Result<(), String> {
+        if self.phase != Phase::Choosing {
+            return Err("Choose a certificate before signing.".into());
+        }
+        if dirty {
+            return Err("Save Office changes before using the signed module.".into());
+        }
+        let source = self.source.clone().ok_or("No saved Office document selected")?;
+        if current.and_then(|p| p.canonicalize().ok()).as_deref() != Some(source.as_path()) {
+            return Err("The active document changed. Reopen the signing dialog.".into());
+        }
+        self.ensure_source(&source)?;
+        let index = self.selected.ok_or("Select a Windows signing certificate explicitly.")?;
+        let certificate = self.certificates.get(index).ok_or("Selected certificate disappeared")?;
+        if !certificate.has_private_key || !certificate.valid_now {
+            return Err("The selected Windows certificate cannot currently sign.".into());
+        }
+        if !self.allow_additional {
+            return Err("Restricting future Office signatures is not implemented. No signing attempted.".into());
+        }
+        let target = PathBuf::from(self.output.trim());
+        self.validate_destination(&target)?;
+        let kind = match self.extension {
+            "docx" => craft_signing_core::broker_protocol::OfficeKind::Docx,
+            "xlsx" => craft_signing_core::broker_protocol::OfficeKind::Xlsx,
+            _ => return Err("Unsupported Office signing format.".into()),
+        };
+        let thumbprint = certificate.thumbprint.clone();
+        let cancel = Arc::clone(&self.cancel);
+        self.cancel.store(false, Ordering::SeqCst);
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("craft-authenticated-v2-opc-sign".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    craft_signing_core::office_host_sign::sign_office_via_installed_signer(
+                        &source,
+                        &target,
+                        kind,
+                        false,
+                        craft_signing_core::broker_protocol::OfficeSignChoice::AllowAdditional,
+                        &thumbprint,
+                        &cancel,
+                    )
+                    .map(|signed| format!(
+                        "Authenticated Craft Signer v2: OPC signature integrity PASS in NEW file: {}. Certificate trust, revocation and eIDAS QES were NOT assessed.",
+                        signed.display(),
+                    ))
+                }))
+                .unwrap_or_else(|_| Err("Authenticated v2 signer failed; inspect the output before retrying".into()));
+                let _ = tx.send(result);
+            })
+            .map_err(|e| format!("Cannot start authenticated v2 signing worker: {e}"))?;
+        self.worker = Some(rx);
+        self.started = Some(Instant::now());
+        self.phase = Phase::Signing;
+        self.notice.clear();
+        self.success = false;
+        Ok(())
+    }
+    fn finish(&mut self, result: Result<String, String>) {
+        self.success = result.is_ok();
+        self.notice = match result {
+            Ok(msg) => msg,
+            Err(error) => format!("Signature operation failed: {error}"),
+        };
+        self.phase = Phase::Finished;
+        self.started = None;
+        self.worker = None;
+        self.inventory = None;
+    }
+    fn poll(&mut self) {
+        if self.phase == Phase::Listing {
+            let done = self.inventory.as_ref().and_then(|r| match r.try_recv() {
+                Ok(value) => Some(value),
+                Err(TryRecvError::Disconnected) => Some(Err("Certificate enumeration disconnected".into())),
+                Err(TryRecvError::Empty) => None,
+            });
+            if let Some(result) = done {
+                self.inventory = None;
+                match result {
+                    Ok(certs) => { self.certificates = certs; self.phase = Phase::Choosing; }
+                    Err(error) => self.finish(Err(error)),
+                }
+            }
+        }
+        if matches!(self.phase, Phase::Signing | Phase::Verifying) {
+            let done = self.worker.as_ref().and_then(|r| match r.try_recv() {
+                Ok(value) => Some(value),
+                Err(TryRecvError::Disconnected) => Some(Err("Signing or verification worker disconnected".into())),
+                Err(TryRecvError::Empty) => None,
+            });
+            if let Some(result) = done { self.finish(result); }
+        }
+    }
+    /// Track any view switch or unsaved edit while verification is pending:
+    /// returning to the original tab must never resurrect a worker verdict.
+    fn invalidate_if_view_changed(&mut self, current: Option<&Path>, dirty: bool) {
+        if !matches!(self.phase, Phase::Verifying | Phase::Finished) { return; }
+        let Some(source) = self.verification_source.as_deref() else { return; };
+        let active = current.and_then(|path| path.canonicalize().ok());
+        let disk_changed = self.verification_stamp.is_none_or(|expected|
+            saved_file_stamp(source).map_or(true, |actual| actual != expected)
+        );
+        let changed = dirty || active.as_deref() != Some(source) || disk_changed;
+        if self.phase == Phase::Verifying {
+            self.verification_context_switched |= changed;
+            return;
+        }
+        if self.success && (changed || self.verification_context_switched) {
+            self.success = false;
+            self.notice = "The document changed or the active document was switched after verification. The previous integrity result does not apply to the current editor view. Save and verify again.".into();
+        }
+    }
+    fn verification_progress_text(&self) -> &'static str {
+        if self.signed_v2_verification {
+            "Checking saved Office signatures through the authenticated Craft Signer v2 broker (OPC integrity only; not QES)..."
+        } else {
+            "Checking native OPC signature integrity in a background worker..."
+        }
+    }
+    pub fn show(&mut self, ctx: &egui::Context, current: Option<&Path>, dirty: bool) {
+        self.invalidate_if_view_changed(current, dirty);
+        self.poll();
+        self.invalidate_if_view_changed(current, dirty);
+        if self.phase == Phase::Idle { return; }
+        if matches!(self.phase, Phase::Listing | Phase::Signing | Phase::Verifying) {
+            ctx.request_repaint_after(Duration::from_millis(150));
+        }
+        let mut close = false;
+        egui::Window::new(format!("{} digital signatures", self.extension.to_ascii_uppercase()))
+            .id(egui::Id::unique(format!("craft-opc-sign-{}", self.extension)))
+            .collapsible(false)
+            .resizable(true)
+            .min_width(430.0)
+            .show(ctx, |ui| {
+                match self.phase {
+                    Phase::Idle => {}
+                    Phase::Listing => {
+                        ui.spinner();
+                        ui.label("Reading personal signing certificates from Windows. Smart-card middleware runs outside the UI thread.");
+                        if ui.button("Cancel").clicked() { close = true; }
+                    }
+                    Phase::Choosing => {
+                        ui.heading("Choose a digital signing certificate");
+                        if let Some(p) = self.source.as_deref() { ui.label(format!("Saved source: {}", p.display())); }
+                        ui.label("Only native Office OPC/XML digital signatures are created; this does not add a visible signature line.");
+                        ui.separator();
+                        egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                            for (idx, cert) in self.certificates.iter().enumerate() {
+                                let eligible = cert.has_private_key && cert.valid_now;
+                                let label = format!(
+                                    "{}\nIssuer: {}\nValid until: {}{}",
+                                    cert.subject, cert.issuer, cert.expires,
+                                    if eligible { "" } else { "\nUnavailable for signing" },
+                                );
+                                ui.add_enabled_ui(eligible, |ui| { ui.radio_value(&mut self.selected, Some(idx), label); });
+                                ui.separator();
+                            }
+                        });
+                        if self.certificates.is_empty() { ui.label("No Windows signing certificates were found."); }
+                        ui.separator();
+                        ui.label("New signed-copy destination (must not already exist):");
+                        ui.text_edit_singleline(&mut self.output);
+                        ui.small("Native OPC permits additional independent signatures. Restricting later signatures is not available in this backend.");
+                        ui.small("Authenticated v2 Sign requires Craft Signer 0.2.3 or newer. The immutable 0.2.2 module can verify but cannot sign through the explicit policy protocol.");
+                        ui.small("The token/provider opens its OWN PIN prompt. Do not enter a PIN into Craft.");
+                        ui.small("A successful integrity check does not by itself certify the signer as qualified under eIDAS.");
+                        if !self.notice.is_empty() { ui.colored_label(egui::Color32::YELLOW, &self.notice); }
+                        ui.horizontal(|ui| {
+                            let eligible = self.selected.and_then(|i| self.certificates.get(i))
+                                .is_some_and(|cert| cert.has_private_key && cert.valid_now);
+                            if ui.add_enabled(eligible, egui::Button::new("Sign new copy")).clicked() {
+                                if let Err(err) = self.start_sign_v2(current, dirty) { self.notice = err; }
+                            }
+                            if ui.button("Cancel").clicked() { close = true; }
+                        });
+                    }
+                    Phase::Signing => {
+                        ui.spinner();
+                        ui.label("Authenticated Craft Signer broker is running. Check the Windows provider PIN dialog.");
+                        if let Some(t) = self.started { ui.label(format!("Elapsed: {} seconds (worker limit: 340 seconds)", t.elapsed().as_secs())); }
+                        if ui.button("Cancel signing").clicked() {
+                            self.cancel.store(true, Ordering::SeqCst);
+                            ui.label("Cancellation requested; waiting for worker confirmation.");
+                        }
+                        ui.label("Do not start another signing operation until this one completes.");
+                    }
+                    Phase::Verifying => {
+                        ui.spinner();
+                        ui.label(self.verification_progress_text());
+                    }
+                    Phase::Finished => {
+                        if self.success { ui.strong("Integrity check completed"); }
+                        else { ui.colored_label(egui::Color32::RED, "Signature operation failed"); }
+                        ui.label(&self.notice);
+                        if ui.button("Close").clicked() { close = true; }
+                    }
+                }
+            });
+        if close && !matches!(self.phase, Phase::Signing | Phase::Verifying) {
+            self.phase = Phase::Idle;
+            self.inventory = None;
+            self.worker = None;
+            self.source = None;
+            self.verification_source = None;
+            self.verification_stamp = None;
+            self.verification_context_switched = false;
+        }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn v2_sign_never_bypasses_explicit_saved_document_or_certificate_selection() {
+        let mut dialog = OfficeSignUi::new("docx");
+        dialog.phase = Phase::Choosing;
+        assert!(dialog.start_sign_v2(None, true).unwrap_err().contains("Save"));
+        assert!(dialog.start_sign_v2(None, false).is_err());
+        assert!(dialog.worker.is_none());
+    }
+
+    #[test]
+    fn v2_sign_cannot_run_without_selected_identity_even_for_saved_office_file() {
+        let mut dialog = OfficeSignUi::new("xlsx");
+        let path = std::env::temp_dir().join(format!(
+            "craft-v2-sign-explicit-cert-{}.xlsx", std::process::id()
+        ));
+        std::fs::write(&path, b"PK\\x03\\x04synthetic-not-signed").unwrap();
+        let source = path.canonicalize().unwrap();
+        dialog.phase = Phase::Choosing;
+        dialog.source = Some(source.clone());
+        dialog.selected = None;
+        assert!(dialog.start_sign_v2(Some(&source), false).unwrap_err().contains("certificate"));
+        assert!(dialog.worker.is_none());
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn refusal_to_overwrite_and_wrong_extension() {
+        let mut dialog = OfficeSignUi::new("docx");
+        let parent = std::env::temp_dir();
+        let source = parent.join(format!("craft-doc-source-{}.docx", std::process::id()));
+        std::fs::write(&source, b"sample").unwrap();
+        dialog.source = Some(source.clone());
+        assert!(dialog.validate_destination(&source).is_err());
+        assert!(dialog.validate_destination(&source.with_extension("xlsx")).is_err());
+        let unused = parent.join(format!("craft-doc-signed-not-created-{}.docx", std::process::id()));
+        assert!(dialog.validate_destination(&unused).is_ok());
+        std::fs::remove_file(source).unwrap();
+    }
+    #[test]
+    fn dirty_document_cannot_be_verified_as_saved() {
+        let mut dialog = OfficeSignUi::new("xlsx");
+        let result = dialog.verify(Path::new("synthetic-unsaved.xlsx"), true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Unsaved edits"));
+        assert!(!dialog.busy());
+    }
+    #[test]
+    fn no_invalid_source_can_open_signing_dialog() {
+        let mut dialog = OfficeSignUi::new("xlsx");
+        assert!(dialog.begin(Path::new("not-a-saved-document.xlsx")).is_err());
+        assert!(!dialog.busy());
+    }
+    #[test]
+    fn completed_verification_does_not_apply_to_another_active_document() {
+        for extension in ["docx", "xlsx"] {
+            let file = std::env::temp_dir().join(format!(
+                "craft-v2-view-{}.{}", std::process::id(), extension
+            ));
+            std::fs::write(&file, b"synthetic saved document only").unwrap();
+            let saved = file.canonicalize().unwrap();
+            let mut dialog = OfficeSignUi::new(extension);
+            dialog.phase = Phase::Finished;
+            dialog.success = true;
+            dialog.notice = "OPC integrity PASS".into();
+            dialog.verification_source = Some(saved.clone());
+            dialog.verification_stamp = Some(saved_file_stamp(&saved).unwrap());
+            dialog.invalidate_if_view_changed(Some(&saved), false);
+            assert!(dialog.success, "unchanged saved view retains its verdict");
+            dialog.invalidate_if_view_changed(Some(&saved), true);
+            assert!(!dialog.success, "unsaved edits invalidate prior success");
+            assert!(dialog.notice.contains("does not apply"));
+            dialog.success = true;
+            dialog.invalidate_if_view_changed(None, false);
+            assert!(!dialog.success, "closed or switched document invalidates the verdict");
+            std::fs::remove_file(&file).unwrap();
+        }
+    }
+    #[test]
+    fn verification_progress_identifies_native_or_signed_broker_without_qes_claim() {
+        for extension in ["docx", "xlsx"] {
+            let mut dialog = OfficeSignUi::new(extension);
+            assert!(dialog.verification_progress_text().contains("native OPC"));
+            dialog.signed_v2_verification = true;
+            let label = dialog.verification_progress_text();
+            assert!(label.contains("Craft Signer v2 broker"));
+            assert!(label.contains("not QES"));
+            assert!(!label.contains("QES PASS"));
+        }
+    }
+    #[test]
+    fn v2_never_verifies_dirty_or_unsaved_document() {
+        for extension in ["docx", "xlsx"] {
+            let mut dialog = OfficeSignUi::new(extension);
+            let source = PathBuf::from(format!("not-saved.{extension}"));
+            let refusal = dialog.verify_v2(&source, true);
+            assert!(refusal.is_err());
+            assert!(refusal.err().is_some_and(|msg| msg.contains("Save")));
+            assert!(!dialog.busy());
+            assert!(dialog.verify_v2(&source, false).is_err());
+            assert!(!dialog.busy());
+        }
+    }
+
+    #[test]
+    fn same_size_rewrite_during_worker_verification_is_rejected() {
+        for extension in ["docx", "xlsx"] {
+            let path = std::env::temp_dir().join(format!(
+                "craft-verify-digest-{}-{extension}.{}", std::process::id(), extension,
+            ));
+            std::fs::write(&path, b"one-one").unwrap();
+            let result = verify_stable_saved_bytes(&path, || {
+                std::fs::write(&path, b"two-two").unwrap();
+                Ok("OPC integrity PASS".into())
+            });
+            assert!(result.is_err(), "same-length byte substitution must fail closed");
+            assert!(result.unwrap_err().contains("changed during signature verification"));
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
+
+    #[test]
+    fn switching_away_and_back_while_verification_runs_invalidates_success() {
+        for extension in ["docx", "xlsx"] {
+            let path = std::env::temp_dir().join(format!(
+                "craft-verify-active-{}-{extension}.{}", std::process::id(), extension,
+            ));
+            std::fs::write(&path, b"synthetic snapshot").unwrap();
+            let saved = path.canonicalize().unwrap();
+            let other = std::env::temp_dir().join(format!(
+                "craft-verify-other-{}-{extension}.{}", std::process::id(), extension,
+            ));
+            std::fs::write(&other, b"another document").unwrap();
+            let other = other.canonicalize().unwrap();
+            let mut dialog = OfficeSignUi::new(extension);
+            dialog.phase = Phase::Verifying;
+            dialog.verification_source = Some(saved.clone());
+            dialog.verification_stamp = Some(saved_file_stamp(&saved).unwrap());
+            dialog.invalidate_if_view_changed(Some(&saved), false);
+            assert!(!dialog.verification_context_switched);
+            dialog.invalidate_if_view_changed(Some(&other), false);
+            dialog.invalidate_if_view_changed(Some(&saved), false);
+            dialog.finish(Ok("OPC integrity PASS".into()));
+            dialog.invalidate_if_view_changed(Some(&saved), false);
+            assert!(!dialog.success, "returning to a prior tab cannot resurrect a verdict");
+            assert!(dialog.notice.contains("does not apply"));
+            std::fs::remove_file(&path).unwrap();
+            std::fs::remove_file(&other).unwrap();
+        }
+    }
+
+
+    #[test]
+    fn external_replacement_after_verification_revokes_cached_success() {
+        for extension in ["docx", "xlsx"] {
+            let path = std::env::temp_dir().join(format!(
+                "craft-verify-external-{}-{extension}.{}", std::process::id(), extension,
+            ));
+            std::fs::write(&path, b"first saved file").unwrap();
+            let saved = path.canonicalize().unwrap();
+            let mut dialog = OfficeSignUi::new(extension);
+            dialog.verification_source = Some(saved.clone());
+            dialog.verification_stamp = Some(saved_file_stamp(&saved).unwrap());
+            dialog.phase = Phase::Finished;
+            dialog.success = true;
+            dialog.notice = "OPC integrity PASS".into();
+            std::fs::write(&path, b"externally modified saved document bytes").unwrap();
+            dialog.invalidate_if_view_changed(Some(&saved), false);
+            assert!(!dialog.success, "external disk edit invalidates displayed integrity");
+            assert!(dialog.notice.contains("does not apply"));
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
+
+}

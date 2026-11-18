@@ -50,6 +50,8 @@ pub mod paper_view;
 pub mod pivot_pane;
 pub mod printing;
 pub mod ribbon;
+pub mod office_sign_ui;
+pub mod signer_extension;
 pub mod selection_glide;
 pub mod tabs;
 pub mod text_box;
@@ -219,6 +221,7 @@ pub struct Perf {
 }
 
 pub struct SheetApp {
+    pub office_sign: office_sign_ui::OfficeSignUi,
     pub session: Session,
     pub ui: UiState,
     /// The window chrome to draw (see [`Chrome`]).

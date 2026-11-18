@@ -6,7 +6,8 @@
 //! server: `{"id":1,"method":"ui.inspect","params":{}}` → `{"id":1,"ok":true,"result":…}`.
 //! The first line of each connection must carry the token (`docs/control-protocol.md`).
 //! See `gridcraft_ui_egui::control` and `docs/control-protocol.md` for the methods.
-#![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
+// Native Windows GUI in all build profiles: no visible console.
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(target_os = "macos")]
